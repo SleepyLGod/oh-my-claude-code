@@ -119,20 +119,36 @@ The harder questions are no longer about performance class or textbook tree iden
 **Policy abstraction vs. user-facing policy**  
 A policy layer appears necessary, but that does not automatically imply that version 0 must expose `policy.md` as a user-authored interface. The more fundamental requirement is that grouping rules, layer construction rules, refresh triggers, and online/offline behavior become explicit and program-interpretable rather than remaining scattered across prompts and hardcoded logic. A practical first version may ship with a small set of built-in policies and only later externalize them as `policy.md`.
 
+> The key distinction is between `policy` as a system abstraction and `policy.md` as a user-facing interface. Version 0 does not need to assume that end users define tree structure directly. A more practical first step is to make policy an internal, explicit control layer, with a few built-in policies that can later be surfaced as `policy.md` if needed. Otherwise, the policy layer may become too heavy too early and start behaving like a semi-structured DSL before the core memory model is even stabilized.
+
 **What the leaf actually stores**  
 There are two plausible scopes. One option is that a leaf stores raw or normalized events, which makes the tree cover the full path from interaction capture to higher-level memory. Another option is that raw transcripts remain outside the library, and the leaf stores Claude-style durable memory objects, closer to today’s topic files. The second option is likely more realistic for version 0 if the goal is to formalize Claude Code’s current memory layer rather than replace its transcript substrate.
+
+> A useful distinction is that the public `append` API and the library’s internal ingestion substrate do not have to coincide. In a Claude-Code-compatible design, `append` does not need to mean “append a raw message.” It can instead mean “perform a durable memory insertion,” i.e. create or update a leaf-level memory object using Claude-style memory logic.
+>
+> This matters because the deeper design choice is not simply “raw leaf versus durable leaf.” The real question is who owns memory formation. If `append` takes raw messages directly, then the library itself must decide whether a message is worth remembering, how it maps to an existing topic, and whether it should update or create a memory object. If `append` instead aligns with durable memory insertion, then the library can reuse Claude Code’s current logic more directly: raw interaction is captured first, and durable memory objects are then formed or updated by the main agent, extraction logic, or later maintenance passes.
+>
+> A practical version 0 may therefore keep the public API aligned with durable memory writes, while still allowing the engine to manage a lower-level JSONL/raw-transcript substrate internally for scheduling, maintenance, and future token-saving optimizations. In other words, bringing the raw append layer into project scope does not require treating raw messages as tree leaves.
 
 **What a parent node actually is**  
 A parent may act as routing metadata, as a semantic summary, or as a higher-level memory object. These are not the same thing. Updating routing metadata, updating a summary, and updating authoritative semantic memory are different operations. This distinction has to be made explicit before the tree model can be stabilized.
 
+> A routing node answers “where should retrieval or insertion go next”; a summary node answers “what do these children roughly say”; a higher-level memory node answers “what durable abstraction should persist above these children.” These roles can coexist, but they should not be conflated. Otherwise, “update parent” remains underspecified.
+
 **Whether the tree is primarily a memory tree or an index tree**  
 One interpretation is that leaves hold the real memory content while internal nodes mainly organize and route retrieval. Another interpretation is that all levels of the tree carry memory at different abstraction levels. A hybrid interpretation may be the most realistic: lower layers hold more concrete memory objects, while upper layers carry both routing structure and derived semantic memory.
+
+> This is likely the most important structural question. A pure index tree is cleaner and easier to rebuild, but may underspecify the semantic role of parent updates. A pure memory tree is conceptually rich, but makes consistency and update semantics much heavier. A hybrid, memory-carrying index tree currently looks like the most realistic fit for Claude-style memory.
 
 **What online/offline consistency actually guarantees**  
 If leaves are written first and parents may lag, the system needs an explicit consistency model. The important question is not just whether updates are online or offline, but what `append` guarantees on return, which layers are authoritative at each point, and what `retrieve` is allowed to read when upper layers are stale.
 
+> The core issue is not scheduler design but API semantics. If `append` returns before parent refresh, then leaf durability and parent freshness must be treated separately. Version 0 does not need a complex formal model, but it does need an explicit guarantee: what is durable, what may lag, and what retrieval is allowed to rely on.
+
 **What retrieval means once the tree exists**  
 Claude Code today is still closer to flat shortlist retrieval: scan memory files, read metadata, shortlist with an LLM, then load content. A multi-layer tree will require a more formal retrieval semantics: which layers are consulted first, when traversal goes downward, whether parent summaries can satisfy retrieval directly, and whether mixed retrieval across summaries and leaves is allowed.
+
+> This should stay at the level of retrieval semantics rather than “views.” The immediate question is not output formatting, but whether retrieval is satisfied by leaves only, by parent summaries, or by a mixed traversal policy. Once the tree role and policy model are fixed, a large part of retrieval design will follow naturally from them.
 
 ---
 
