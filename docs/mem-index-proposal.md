@@ -95,6 +95,45 @@ The tree can be controlled by a `policy.md`:
 
 In this design, the program owns the structure and the update schedule, while the LLM is used as a semantic operator when the policy requires semantic grouping or summarization. The main idea is to formalize Claude-style memory as a policy-driven multi-layer index with a very small API surface, a fully file-based implementation, and enough internal structure to support later work on cache reuse, LLM cost reduction, batching, and smarter update strategies.
 
+### What already seems settled
+
+Several design directions already appear stable enough to treat as the working shape of the system.
+
+- The external interface should remain minimal: `append` and `retrieve`.
+- The artifact should be a reusable library, not a full agent framework.
+- A Python-facing API with a Rust-backed core is a reasonable engineering split.
+- The physical substrate should remain file-native: files, directories, and subdirectories.
+- Each directory level may carry its own `metadata.md`.
+- The system should be multi-layer rather than a flat memory folder.
+- Leaves should be append-oriented, and likely append-only in the first design.
+- Upper-level nodes should be derived structures rather than simple aliases of leaves.
+- A policy layer should act as the control plane for grouping, update mode, and refresh behavior.
+- Online versus offline update should be an explicit design dimension, not an accidental implementation detail.
+- Once online/offline is made explicit, a maintenance layer becomes unavoidable: some appends only write leaves, some trigger immediate parent refresh, some mark nodes dirty, and some require later rebuild or consolidation.
+- The LLM should not be treated as the controller of the system. It should be treated as a semantic operator invoked by the program when semantic grouping, summarization, or parent refresh is required.
+
+### What still needs to be pinned down
+
+The harder questions are no longer about performance class or textbook tree identity. They are about object model and system semantics.
+
+**Policy abstraction vs. user-facing policy**  
+A policy layer appears necessary, but that does not automatically imply that version 0 must expose `policy.md` as a user-authored interface. The more fundamental requirement is that grouping rules, layer construction rules, refresh triggers, and online/offline behavior become explicit and program-interpretable rather than remaining scattered across prompts and hardcoded logic. A practical first version may ship with a small set of built-in policies and only later externalize them as `policy.md`.
+
+**What the leaf actually stores**  
+There are two plausible scopes. One option is that a leaf stores raw or normalized events, which makes the tree cover the full path from interaction capture to higher-level memory. Another option is that raw transcripts remain outside the library, and the leaf stores Claude-style durable memory objects, closer to today’s topic files. The second option is likely more realistic for version 0 if the goal is to formalize Claude Code’s current memory layer rather than replace its transcript substrate.
+
+**What a parent node actually is**  
+A parent may act as routing metadata, as a semantic summary, or as a higher-level memory object. These are not the same thing. Updating routing metadata, updating a summary, and updating authoritative semantic memory are different operations. This distinction has to be made explicit before the tree model can be stabilized.
+
+**Whether the tree is primarily a memory tree or an index tree**  
+One interpretation is that leaves hold the real memory content while internal nodes mainly organize and route retrieval. Another interpretation is that all levels of the tree carry memory at different abstraction levels. A hybrid interpretation may be the most realistic: lower layers hold more concrete memory objects, while upper layers carry both routing structure and derived semantic memory.
+
+**What online/offline consistency actually guarantees**  
+If leaves are written first and parents may lag, the system needs an explicit consistency model. The important question is not just whether updates are online or offline, but what `append` guarantees on return, which layers are authoritative at each point, and what `retrieve` is allowed to read when upper layers are stale.
+
+**What retrieval means once the tree exists**  
+Claude Code today is still closer to flat shortlist retrieval: scan memory files, read metadata, shortlist with an LLM, then load content. A multi-layer tree will require a more formal retrieval semantics: which layers are consulted first, when traversal goes downward, whether parent summaries can satisfy retrieval directly, and whether mixed retrieval across summaries and leaves is allowed.
+
 ---
 
 p.s. sth about B+ tree and LSM tree
