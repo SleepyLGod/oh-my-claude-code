@@ -75,85 +75,107 @@ may not be limitations, maybe engineering trade-offs
 
 ## Idea Statement
 
-We can treat the Claude-style memory part as sth that should be wrapped into a real library, not left as scattered prompting logic. The target shape is simple on the outside and structured on the inside: 
+### Fundamental intent
 
-- a Python-facing memory module with only two calls, `append` and `retrieve`
-- backed by a Rust/Cpp core that can later handle concurrency, caching, and lower-level optimizations without forcing a redesign.
+Turn the raw conversation and work process into a reusable, organizable, queryable, and maintainable multi-layer memory structure, whose behavior is controlled by an explicit policy rather than scattered across prompts and ad-hoc background logic.
 
-Internally, the system is a multi-layer, file-native tree:
+That intent decomposes into four things:
 
-- Leaves are append-only memory files.
-- Parent nodes are derived nodes created from leaves or lower-level groups.
-- The whole layout stays on the local filesystem: files, directories, subdirectories, and a `metadata.md` at each directory level.
-- The point is not to implement a textbook B+ tree or LSM-tree, but to borrow the discipline of a storage engine while keeping the actual memory structure closer to Claude-style semantic organization.
+1. **Capture** — new input must first be stably recorded; otherwise later memory construction has no reliable substrate.
+2. **Structure** — raw input is not reusable memory; the system must organize it into higher-level semantic form.
+3. **Control** — the organization scheme must not be hard-coded; users or system designers must be able to specify structure and update strategy through a policy file.
+4. **Lifecycle** — memory is not write-once; it needs update, merge, rewrite, invalidation, and reorganization over time.
 
-The tree can be controlled by a `policy.md`:
+The core idea is to turn the Claude-style local memory behavior into a real library with a small developer-facing API and a more explicit runtime contract. The intent is not to build a general agent framework or a textbook data structure first. The intent is to package a local memory runtime that can be reused, inspected, and gradually extended across different memory styles.
 
-- That policy decides how leaves are grouped and when upper layers are updated.
-- A policy may be purely structural, such as “every 10 msgs create one parent,” or semantic, such as “group msgs under the same topic and create a new parent when a new topic appears.”
-- The same policy can also decide whether updates happen online (zep/mem0 style) or in the background (claude code style). If online, an `append` can trigger an immediate LLM-based parent update. If offline, the leaf is written first and the upper layers are refreshed later.
+### Why move from mixed-prompt mode to policy-driven mode
 
-In this design, the program owns the structure and the update schedule, while the LLM is used as a semantic operator when the policy requires semantic grouping or summarization. The main idea is to formalize Claude-style memory as a policy-driven multi-layer index with a very small API surface, a fully file-based implementation, and enough internal structure to support later work on cache reuse, LLM cost reduction, batching, and smarter update strategies.
+Claude Code today already contains many policy-like rules, but they live in three separate places that never see each other:
+
+| Source | Examples | Problem |
+|---|---|---|
+| Hard-coded runtime logic | `MAX_ENTRYPOINT_LINES = 200`; extractor skip conditions; autoDream trigger thresholds (24 h + 5 sessions) | Invisible and non-adjustable to users; changing behavior requires changing code |
+| Prompt-embedded semantic rules | “organize by topic not chronology”; four-type taxonomy; `WHAT_NOT_TO_SAVE_SECTION` | Rules are coupled with execution logic; different stages’ prompts are unaware of each other’s constraints |
+| Feature-gate branches | `tengu_moth_copse`; KAIROS mode; TEAMMEM gating | System behavior depends on the combinatorial state of a set of external switches, lacking overall semantic consistency |
+
+The fundamental problem: no one — including the system itself — can see the complete definition of memory behavior in one place. To answer “what happens when a user appends a message?”, you would need to read `memdir.ts`, `extractMemories/prompts.ts`, `stopHooks.ts`, `backgroundHousekeeping.ts`, `findRelevantMemories.ts`, and the state of several feature gates simultaneously, to reconstruct the full path.
+
+The purpose of moving to policy-driven mode: **converge the complete definition of memory behavior onto a single artifact that is user-editable, program-parseable, and LLM-interpretable.**
+
+### Public API and formalization scope
+
+At the outer boundary, the library should stay minimal:
+
+- `append(raw_message)` records new interaction into the memory runtime
+- `retrieve(query)` asks the runtime for relevant memory given a current task or question
+
+The point of formalization is limited but important. The proposal is not trying to fully formalize semantic memory reasoning. It is trying to formalize:
+
+- **Public API contract** — `append` means “advance the memory runtime,” not “immediately write a topic file.” `retrieve` means “return useful memory materials under the current policy,” not “do a DB query.”
+- **Local storage contract** — which file families exist, what roles they play (index vs. body vs. raw log), and what invariants the runtime enforces.
+- **Lifecycle** — the complete path from raw capture → durable memory formation → maintenance → retrieval, no longer defined implicitly by scattered stopHooks + backgroundHousekeeping + gated extractors, but defined explicitly by ordered steps in `stages`.
+- **Runtime / LLM boundary** — every step has an explicit `kind: runtime | semantic`. Semantic steps receive controlled text assembled from `llm_policy_text`, not free-form prompts.
+- **Policy surface** — the set of behavioral dimensions that users can configure without touching code.
+
+The runtime is file-native. Developers should be able to inspect what happened by looking at local files rather than an opaque service. The current reference shape is aligned with Claude Code’s existing local memory behavior:
+
+- raw interaction is recorded in local append-log form (`jsonl`-like session transcripts)
+- memory is materialized into local Markdown files
+- lightweight index-like files are also maintained locally
+
+This current shape is only one policy instantiation, not the permanent identity of the system. Future policies may move toward Zep-like schemas, Mem0-like organization, or more explicit multi-layer trees without changing the public API.
+
+### Policy as control surface
+
+The central control surface is a **single constrained policy file** rather than unconstrained prompt text. That file should remain human-editable, but it should not collapse into free-form prose or a full DSL. A practical target is one policy artifact with two kinds of sections:
+
+- structured sections interpreted by the runtime
+- bounded behavioral sections interpreted by the LLM
+
+The structured sections can carry things like storage layout, maintenance mode, triggers, or retrieval style. The behavioral sections can carry things like what should be remembered, how to organize notes, when to merge versus create, and how retrieval should prioritize different local artifacts.
+
+Within this framing, online and offline behavior are best treated as maintenance modes under policy rather than as different system identities. A policy may choose to:
+
+- update memory files immediately on append
+- defer some updates to extraction or consolidation passes
+- buffer messages and flush on semantic boundary detection
+- mix synchronous and asynchronous maintenance depending on the memory style
+
+The implementation split still makes sense:
+
+- Python for the library surface that developers call directly
+- Rust/C++ for the runtime core that owns file I/O discipline, append logs, maintenance scheduling, dirty tracking, caching, and future concurrency
+
+That low-level core is still valuable even when some behavioral policy is interpreted by the LLM, because the system still needs a robust local runtime: file updates, scheduling, tracing, recovery, and later optimization should not depend on prompt glue alone.
 
 ### What already seems settled
 
-Several design directions already appear stable enough to treat as the working shape of the system.
-
-- The external interface should remain minimal: `append` and `retrieve`.
 - The artifact should be a reusable library, not a full agent framework.
-- A Python-facing API with a Rust-backed core is a reasonable engineering split.
-- The physical substrate should remain file-native: files, directories, and subdirectories.
-- Each directory level may carry its own `metadata.md`.
-- The system should be multi-layer rather than a flat memory folder.
-- Leaves should be append-oriented, and likely append-only in the first design.
-- Upper-level nodes should be derived structures rather than simple aliases of leaves.
-- A policy layer should act as the control plane for grouping, update mode, and refresh behavior.
-- Online versus offline update should be an explicit design dimension, not an accidental implementation detail.
-- Once online/offline is made explicit, a maintenance layer becomes unavoidable: some appends only write leaves, some trigger immediate parent refresh, some mark nodes dirty, and some require later rebuild or consolidation.
-- The LLM should not be treated as the controller of the system. It should be treated as a semantic operator invoked by the program when semantic grouping, summarization, or parent refresh is required.
+- The public API should stay minimal: `append(raw_message)` and `retrieve(query)`.
+- The runtime should remain local-file-native and inspectable.
+- A Python-facing surface with a lower-level systems core remains a reasonable split.
+- Policy should be explicit and configurable rather than hidden across prompts and hardcoded paths.
+- A single constrained policy file is a better target than either unconstrained markdown or a heavy standalone DSL.
+- The current Claude-Code-aligned local file layout is the right initial runtime shape, but it should be treated as one policy family rather than the only future organization.
 
 ### What still needs to be pinned down
 
-The harder questions are no longer about performance class or textbook tree identity. They are about object model and system semantics.
+**What belongs in the constrained policy file**  
+The key question is not whether policy exists, but how much of it should be structured and how much should remain behavioral. The file needs enough structure that the runtime can depend on it, but enough flexibility that different memory styles can still be expressed without turning the policy into a heavyweight DSL.
 
-**Policy abstraction vs. user-facing policy**  
-A policy layer appears necessary, but that does not automatically imply that version 0 must expose `policy.md` as a user-authored interface. The more fundamental requirement is that grouping rules, layer construction rules, refresh triggers, and online/offline behavior become explicit and program-interpretable rather than remaining scattered across prompts and hardcoded logic. A practical first version may ship with a small set of built-in policies and only later externalize them as `policy.md`.
+> A likely split is: deterministic runtime/config fields for things like storage layout, maintenance triggers, update mode, and retrieval style; bounded natural-language sections for LLM-facing memory behavior. The exact boundary between those two parts still needs to be fixed.
 
-> The key distinction is between `policy` as a system abstraction and `policy.md` as a user-facing interface. Version 0 does not need to assume that end users define tree structure directly. A more practical first step is to make policy an internal, explicit control layer, with a few built-in policies that can later be surfaced as `policy.md` if needed. Otherwise, the policy layer may become too heavy too early and start behaving like a semi-structured DSL before the core memory model is even stabilized.
+**How closely the runtime should align with Claude Code**  
+The current implementation target is Claude-Code-compatible local output and lifecycle, but the broader goal is to support other policy families later. The open question is how much of Claude Code should be treated as the default runtime shape versus how much should be factored out as policy-dependent behavior from the start.
 
-**What the leaf actually stores**  
-There are two plausible scopes. One option is that a leaf stores raw or normalized events, which makes the tree cover the full path from interaction capture to higher-level memory. Another option is that raw transcripts remain outside the library, and the leaf stores Claude-style durable memory objects, closer to today’s topic files. The second option is likely more realistic for version 0 if the goal is to formalize Claude Code’s current memory layer rather than replace its transcript substrate.
+> This is the main architectural tradeoff. A closer Claude-Code alignment makes version 0 easier to define and validate. A more abstract policy model makes later Zep/Mem0-style variants easier, but risks over-generalizing before the current runtime is stable.
 
-> A useful distinction is that the public `append` API and the library’s internal ingestion substrate do not have to coincide. In a Claude-Code-compatible design, `append` does not need to mean “append a raw message.” It can instead mean “perform a durable memory insertion,” i.e. create or update a leaf-level memory object using Claude-style memory logic.
->
-> This matters because the deeper design choice is not simply “raw leaf versus durable leaf.” The real question is who owns memory formation. If `append` takes raw messages directly, then the library itself must decide whether a message is worth remembering, how it maps to an existing topic, and whether it should update or create a memory object. If `append` instead aligns with durable memory insertion, then the library can reuse Claude Code’s current logic more directly: raw interaction is captured first, and durable memory objects are then formed or updated by the main agent, extraction logic, or later maintenance passes.
->
-> A practical version 0 may therefore keep the public API aligned with durable memory writes, while still allowing the engine to manage a lower-level JSONL/raw-transcript substrate internally for scheduling, maintenance, and future token-saving optimizations. In other words, bringing the raw append layer into project scope does not require treating raw messages as tree leaves.
+**How append and retrieve should interact with policy**  
+Because `append` takes raw message data, the library owns memory formation. That means policy is not just a retrieval concern: it affects when files are created, when they are updated, what maintenance runs inline, and what may be deferred.
 
-**What a parent node actually is**  
-A parent may act as routing metadata, as a semantic summary, or as a higher-level memory object. These are not the same thing. Updating routing metadata, updating a summary, and updating authoritative semantic memory are different operations. This distinction has to be made explicit before the tree model can be stabilized.
+> This is where online/offline really matters. Once append is raw-input-facing, policy influences both write-time behavior and later maintenance. The exact lifecycle needs to be made explicit so developers know what `append` guarantees and what `retrieve` is allowed to depend on.
 
-> A routing node answers “where should retrieval or insertion go next”; a summary node answers “what do these children roughly say”; a higher-level memory node answers “what durable abstraction should persist above these children.” These roles can coexist, but they should not be conflated. Otherwise, “update parent” remains underspecified.
+**How general the policy model should be in version 0**  
+If the long-term goal is to support multiple agent-memory styles, the policy model should not be overfit to Claude Code alone. At the same time, version 0 should not become a pseudo-general framework that is too abstract to reproduce any concrete system well.
 
-**Whether the tree is primarily a memory tree or an index tree**  
-One interpretation is that leaves hold the real memory content while internal nodes mainly organize and route retrieval. Another interpretation is that all levels of the tree carry memory at different abstraction levels. A hybrid interpretation may be the most realistic: lower layers hold more concrete memory objects, while upper layers carry both routing structure and derived semantic memory.
-
-> This is likely the most important structural question. A pure index tree is cleaner and easier to rebuild, but may underspecify the semantic role of parent updates. A pure memory tree is conceptually rich, but makes consistency and update semantics much heavier. A hybrid, memory-carrying index tree currently looks like the most realistic fit for Claude-style memory.
-
-**What online/offline consistency actually guarantees**  
-If leaves are written first and parents may lag, the system needs an explicit consistency model. The important question is not just whether updates are online or offline, but what `append` guarantees on return, which layers are authoritative at each point, and what `retrieve` is allowed to read when upper layers are stale.
-
-> The core issue is not scheduler design but API semantics. If `append` returns before parent refresh, then leaf durability and parent freshness must be treated separately. Version 0 does not need a complex formal model, but it does need an explicit guarantee: what is durable, what may lag, and what retrieval is allowed to rely on.
-
-**What retrieval means once the tree exists**  
-Claude Code today is still closer to flat shortlist retrieval: scan memory files, read metadata, shortlist with an LLM, then load content. A multi-layer tree will require a more formal retrieval semantics: which layers are consulted first, when traversal goes downward, whether parent summaries can satisfy retrieval directly, and whether mixed retrieval across summaries and leaves is allowed.
-
-> This should stay at the level of retrieval semantics rather than “views.” The immediate question is not output formatting, but whether retrieval is satisfied by leaves only, by parent summaries, or by a mixed traversal policy. Once the tree role and policy model are fixed, a large part of retrieval design will follow naturally from them.
-
----
-
-p.s. sth about B+ tree and LSM tree
-
-- B+ tree thinking emphasizes immediate structural correctness. (like the 'online' policy)
-- LSM thinking emphasizes cheap writes and deferred reconciliation.  (like the 'offline' policy)
-- **Zep and Mem0 are closer to B+ tree thinking, while Claude Code today is much closer in spirit to the LSM tree thinking**.
+> The practical goal is not “generic at all costs.” The practical goal is “Claude-Code-aligned first, but with a policy shape that can later host other families such as Zep-like, Mem0-like, or tree-oriented memory layouts without redesigning the library surface.”

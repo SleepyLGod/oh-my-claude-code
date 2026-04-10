@@ -1,0 +1,513 @@
+# Claude-compatible memory policy demo
+#
+# This file is a user-authored, program-readable policy for a local-file
+# memory runtime.
+#
+# Fixed substrate:
+# - local json/jsonl
+# - local directories
+# - local markdown artifacts
+#
+# Variable above the substrate:
+# - organization model
+# - stage behavior
+# - prompt text
+#
+# Who reads what:
+# - [program] sections are parsed directly by runtime
+# - [llm-text] sections are plain policy text that runtime injects into
+#   semantic steps
+# - [shared] sections are enforced by runtime and may also be surfaced to the
+#   LLM as constraints
+#
+# What the LLM does:
+# - interpret higher-level policy text about organization, index behavior,
+#   topic definition, and topic authoring
+# - perform semantic work inside runtime-bounded steps:
+#   memory-worthiness judgment, candidate writing, topic join/update decisions,
+#   retrieval shortlist selection, extraction filtering, and consolidation
+#   merge/prune decisions
+#
+# What the LLM does NOT do:
+# - parse this YAML structure
+# - schedule stages
+# - decide legal paths or enabled file families
+# - directly write files
+# - assemble retrieval materials
+#
+# Runtime / LLM collaboration model:
+#
+# The collaboration is strictly asymmetric:
+# - Runtime is the orchestrator: it parses YAML, schedules stages,
+#   manages file I/O, executes ordered steps, decides when to call LLM.
+# - LLM is a runtime-bounded semantic worker: it only operates within
+#   steps that the runtime has already decided to execute, receiving
+#   controlled policy text as governing context.
+#
+# The LLM performs semantic judgment (is this worth remembering? which
+# topic does it belong to? which files are relevant to a query?) and
+# content generation (write topic file body, generate memory candidate).
+# The LLM never interprets system structure — all structural
+# predictability is guaranteed by the runtime.
+#
+# This separation means: the system's structural behavior is fully
+# deterministic and inspectable, while LLM operates only in the
+# semantic space where human-like judgment is actually needed.
+#
+# Important concept:
+# - policy text is not just background context
+# - runtime injects it as governing context for semantic steps
+
+# Parsing model: YAML structure is parsed by the runtime; llm_policy_text
+# blocks are injected into semantic steps as LLM context.
+version: 1
+
+###############################################################################
+# 1. Substrate
+###############################################################################
+
+substrate:
+  # [program]
+  root_dir: .memory
+
+  file_groups:
+    transcript_log:
+      enabled: true
+      relative_path: logs/session.jsonl
+      format: jsonl
+
+    index_file:
+      enabled: true
+      relative_path: MEMORY.md
+      format: markdown
+
+    topic_files:
+      enabled: true
+      relative_dir: topics
+      extension: .md
+      format: markdown
+
+  artifact_contract:
+    # [shared]
+    # Runtime enforces these rules directly.
+    # Runtime may also inject them into semantic steps when useful.
+    - "MEMORY.md is an index file, not a durable memory body."
+    - "Topic files contain durable memory content."
+    - "The transcript log is raw interaction storage."
+    - "Only enabled file groups may be created."
+
+###############################################################################
+# 2. Organization
+###############################################################################
+
+organization:
+  # [program + llm-text]
+  # Current instance is Claude-compatible:
+  # - flat top-level index
+  # - durable memory stored in topic files
+  #
+  # `kind` is designed as an extensible enum but schema version 1 only
+  # implements flat_topics. The file_groups, stages, and llm_policy_text
+  # below are all flat_topics-specific. Changing `kind` alone will NOT
+  # produce a working alternative — a new schema version is required.
+  # Planned future kinds (not yet implemented):
+  #   - fact_store     (Mem0-like: durable unit = fact, flat or grouped)
+  #   - entity_graph   (Zep-like: entities/ + edges/ + communities/ sub-folders)
+  #   - episode_cluster (EverMemos-like: episode segments + profile distillation)
+  # Changing `kind` does NOT change the public API (append / retrieve).
+  kind: flat_topics
+
+  index:
+    file: index_file
+    purpose: top_level_index
+    entry_style: short_markdown_link
+
+  durable_memory:
+    file_group: topic_files    # references file_groups.topic_files
+    unit: topic
+    naming_rule: short_topic_filename
+    allowed_types:
+      # Organization-specific. These match Claude Code's four-type taxonomy.
+      # Other organization kinds may define different types or omit this field.
+      - user
+      - feedback
+      - project
+      - reference
+    frontmatter_required: true
+
+  examples:
+    # [human-readable examples only]
+    topic_files:
+      - user_preferences.md
+      - feedback_testing_style.md
+      - project_release_constraints.md
+      - reference_dashboards.md
+    index_entry:
+      - "- [Testing Style](feedback_testing_style.md) — user prefers narrow tests and minimal test churn"
+
+###############################################################################
+# 3. Modes
+###############################################################################
+
+mode:
+  # [program]
+  #
+  # Built-in modes are named presets over behavioral flags and trigger
+  # conditions. Users may override any field under `custom`.
+  #
+  # Flag-to-stage mapping:
+  # - write_raw_messages           → append stage always writes raw log
+  # - allow_append_memory_write    → append stage may run semantic steps
+  # - require_append_memory_write  → append stage MUST run semantic steps
+  # - require_background_extraction  → extraction stage runs in background
+  # - allow_background_consolidation → consolidation stage may run in background
+  #
+  # Claude Code today best matches offline:
+  # raw log first, main-agent direct write allowed, extractor as fallback.
+  active: offline
+
+  offline:
+    write_raw_messages: true
+    allow_append_memory_write: true
+    require_append_memory_write: false
+    require_background_extraction: true
+    allow_background_consolidation: true
+    triggers:
+      extraction:
+        min_interval_hours: 24
+        min_sessions_since_last: 5
+      consolidation:
+        min_interval_hours: 72
+
+  online:
+    write_raw_messages: true
+    allow_append_memory_write: true
+    require_append_memory_write: true
+    require_background_extraction: false
+    allow_background_consolidation: true
+    triggers:
+      consolidation:
+        min_interval_hours: 72
+
+  custom:
+    write_raw_messages: true
+    allow_append_memory_write: true
+    require_append_memory_write: false
+    require_background_extraction: true
+    allow_background_consolidation: true
+    triggers:
+      extraction:
+        min_interval_hours: 24
+        min_sessions_since_last: 5
+      consolidation:
+        min_interval_hours: 72
+
+###############################################################################
+# 4. Limits
+###############################################################################
+
+limits:
+  # [program]
+  max_index_file_lines: 200
+  max_index_file_bytes: 25000
+  max_header_frontmatter_lines: 30
+  max_scanned_topic_files: 200
+  max_retrieval_results: 5
+
+###############################################################################
+# 5. Stages
+###############################################################################
+
+stages:
+  # [program]
+  # Runtime owns stage existence and scheduling.
+  # Each stage is an ordered list of steps.
+  #
+  # Step execution rule:
+  # - runtime executes steps in listed order
+  # - for semantic steps, runtime concatenates LLM text blocks in listed order
+  # - the LLM only sees the final assembled prompt text
+  #
+  # Orchestration evolution (progressive strategy):
+  # v0 — ordered steps only (current). Sufficient for all linear pipelines
+  #       including Claude-compatible, Mem0-like fact store, and basic
+  #       EverMemos-like episode extraction.
+  # v1 — introduce optional `depends_on` field per step. When present,
+  #       the runtime executes based on dependency graph (implicit DAG).
+  #       When absent, falls back to list order. This enables Zep-like
+  #       workflows where entity dedup and edge extraction can run in
+  #       parallel after entity extraction.
+  #       Example:
+  #         - kind: semantic
+  #           action: deduplicate_entities
+  #           depends_on: [extract_entities]
+  #         - kind: semantic
+  #           action: extract_edges
+  #           depends_on: [extract_entities]
+  #         - kind: runtime
+  #           action: update_communities
+  #           depends_on: [deduplicate_entities, extract_edges]
+  #
+  # Step-level extensibility (reserved fields, not yet implemented):
+  # - `condition`:  gate expression for conditional execution
+  #                 (e.g., buffer_token_count >= 8192). Enables
+  #                 EverMemos-style buffer-and-flush patterns where
+  #                 append may only accumulate without triggering
+  #                 memory formation until a threshold is met.
+  # - `runtime_context`: explicit declaration of which dynamic data
+  #                      the runtime should inject into a semantic step,
+  #                      making "what the LLM sees" fully auditable.
+  #                      (e.g., [raw_message_content, existing_topic_headers])
+
+  initialize:
+    steps:
+      - kind: runtime
+        action: ensure_directory_structure
+      - kind: semantic
+        action: initialize_visible_layout
+        llm_text:
+          - organization_policy
+          - index_policy
+          - topic_policy
+          - initialization_policy
+
+  append:
+    steps:
+      - kind: runtime
+        action: write_raw_log
+      - kind: semantic
+        action: filter_append_message
+        llm_text:
+          - organization_policy
+          - topic_policy
+          - memory_types
+          - do_not_save
+          - append_worth_saving_task
+      - kind: semantic
+        action: write_append_candidate
+        llm_text:
+          - topic_policy
+          - frontmatter_policy
+          - save_policy
+          - append_write_candidate_task
+      - kind: semantic
+        action: choose_append_target
+        llm_text:
+          - organization_policy
+          - index_policy
+          - topic_policy
+          - save_policy
+          - append_choose_target_task
+      - kind: runtime
+        action: apply_memory_write_plan
+
+  retrieve:
+    steps:
+      - kind: runtime
+        action: read_index
+      - kind: runtime
+        action: scan_topic_headers
+      - kind: semantic
+        action: shortlist_topic_files
+        llm_text:
+          - organization_policy
+          - retrieval_policy
+          - retrieve_shortlist_task
+      - kind: runtime
+        action: read_selected_files
+      - kind: runtime
+        action: assemble_retrieval_materials
+
+  extraction:
+    steps:
+      - kind: runtime
+        action: select_recent_message_window
+      - kind: semantic
+        action: filter_extraction_signal
+        llm_text:
+          - organization_policy
+          - memory_types
+          - do_not_save
+          - extraction_policy
+          - extraction_filter_task
+      - kind: semantic
+        action: write_extraction_candidate
+        llm_text:
+          - topic_policy
+          - frontmatter_policy
+          - save_policy
+          - extraction_write_candidate_task
+      - kind: semantic
+        action: choose_extraction_target
+        llm_text:
+          - organization_policy
+          - index_policy
+          - topic_policy
+          - save_policy
+          - extraction_choose_target_task
+      - kind: runtime
+        action: apply_memory_write_plan
+
+  consolidation:
+    steps:
+      - kind: runtime
+        action: scan_current_memory_state
+      - kind: semantic
+        action: merge_or_split_overlapping_topics
+        llm_text:
+          - organization_policy
+          - index_policy
+          - topic_policy
+          - consolidation_policy
+          - consolidation_merge_task
+      - kind: semantic
+        action: prune_and_rewrite_memory_state
+        llm_text:
+          - organization_policy
+          - index_policy
+          - topic_policy
+          - consolidation_policy
+          - consolidation_prune_task
+      - kind: runtime
+        action: apply_consolidation_plan
+
+###############################################################################
+# 6. LLM-visible policy text
+###############################################################################
+
+llm_policy_text:
+  # [llm-text]
+  # Runtime injects these blocks into semantic steps in listed order.
+
+  organization_policy: |
+    The memory system uses a local-file substrate:
+    - raw interactions live in the transcript log
+    - MEMORY.md is the top-level index
+    - topic files contain durable memory
+
+    The current organization is flat:
+    MEMORY.md points to topic files, and topic files hold the actual memory body.
+
+  index_policy: |
+    MEMORY.md is an index, not a durable memory body.
+    Keep it short and skimmable.
+
+    Each entry should be one short markdown link with a one-line hook, for example:
+    - [Testing Style](feedback_testing_style.md) — user prefers narrow tests
+
+    Never write durable memory content directly into MEMORY.md.
+
+  topic_policy: |
+    A topic file is a durable semantic unit.
+    It should group information that is likely to be useful again in future work.
+    Do not organize topic files by time order or by one-off conversation fragments.
+
+    Topic files should have concise frontmatter and a readable markdown body.
+    Topic naming should reflect the semantic subject rather than time order.
+
+    Example topic ideas:
+    - user_preferences
+    - feedback_testing_style
+    - project_release_constraints
+    - reference_dashboards
+
+  memory_types: |
+    Memory types:
+
+    - user:
+      information about the user's role, goals, responsibilities, preferences, or knowledge
+
+    - feedback:
+      guidance about how to approach work, including both corrections and validated successful approaches
+
+    - project:
+      information about ongoing work, goals, decisions, incidents, or constraints that is not otherwise derivable from code or git history
+
+    - reference:
+      pointers to external dashboards, trackers, channels, or documents
+
+  do_not_save: |
+    Do NOT save:
+    - code patterns, architecture, file paths, or project structure
+    - git history or who-changed-what
+    - debugging recipes or fix recipes
+    - anything already documented in CLAUDE.md files
+    - ephemeral task details or current conversation state
+
+  frontmatter_policy: |
+    Use this frontmatter format:
+    ---
+    name: short_display_name
+    description: one-line summary of what this memory contains
+    type: user|feedback|project|reference
+    ---
+
+  save_policy: |
+    Update or remove memories that turn out to be wrong or outdated.
+    Do not write duplicate memories.
+    First check whether an existing topic file should be updated before creating a new one.
+
+    Saving durable memory is a two-step process:
+    1. write or update the topic file
+    2. update the pointer in MEMORY.md
+
+  retrieval_policy: |
+    Access memory when it seems relevant or when the user explicitly asks you to recall or check memory.
+    If the user says to ignore memory, proceed as if MEMORY.md were empty.
+    Memory can become stale; verify current state before acting on a memory that may be outdated.
+
+    A memory that names a file, function, or flag is a claim about past state, not guaranteed current truth.
+
+  extraction_policy: |
+    You are extracting durable memory from a recent raw-message window.
+    Use only the recent message window for extraction.
+    Check existing topic files before proposing a new one.
+
+  consolidation_policy: |
+    You are performing a consolidation pass over topic files and the index.
+    Merge overlap, remove contradictions, tighten wording, and keep MEMORY.md short and useful.
+
+  initialization_policy: |
+    If required visible files do not exist, initialize only the enabled file groups.
+    Do not invent extra file groups.
+
+  append_worth_saving_task: |
+    Judge whether the raw message contains information worth turning into durable memory.
+    Prefer future-useful, non-derivable information.
+
+  append_write_candidate_task: |
+    Turn the raw message into a durable memory candidate suitable for a semantically named topic file.
+
+  append_choose_target_task: |
+    Judge whether the new memory candidate belongs in an existing topic file, should update one, or should become a new topic file.
+
+  retrieve_shortlist_task: |
+    Select the topic files that will clearly help with the current query.
+    Return up to 5 filenames.
+    Be selective.
+
+  extraction_filter_task: |
+    Judge which pieces of the recent message window are worth extracting into durable memory.
+
+  extraction_write_candidate_task: |
+    Turn extractable recent signal into a durable memory candidate suitable for topic-file storage.
+
+  extraction_choose_target_task: |
+    Judge whether extracted recent signal belongs in an existing topic file, should update one, or should become a new topic file.
+
+  consolidation_merge_task: |
+    Judge whether existing topic files overlap, contradict, or should be merged during consolidation.
+
+  consolidation_prune_task: |
+    Aggregate the current memory state into a tighter durable form and prune stale, redundant, or contradicted index entries.
+
+###############################################################################
+# 7. Notes
+###############################################################################
+
+# Notes for implementers:
+# - Internal runtime objects such as "header manifest" or "rewrite plan" are
+#   intentionally NOT formal YAML keys in this user-authored policy.
+#   They belong in code or implementation docs, not in the user-facing config.
+# - See the progressive orchestration strategy comment in Section 5 (stages)
+#   for the planned v0 → v1 evolution path (ordered steps → optional DAG).
