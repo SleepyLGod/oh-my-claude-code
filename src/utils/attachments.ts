@@ -36,6 +36,7 @@ import {
 } from './tasks.js'
 import { getPlanFilePath, getPlan } from './plans.js'
 import { getConnectedIdeName } from './ide.js'
+import { isBuddyEnabled } from '../buddy/enabled.js'
 import {
   filterInjectedMemoryFiles,
   getManagedAndUserConditionalRules,
@@ -861,7 +862,7 @@ export async function getAttachments(
         ),
       ),
     ),
-    ...(feature('BUDDY')
+    ...(isBuddyEnabled()
       ? [
           maybe('companion_intro', () =>
             Promise.resolve(getCompanionIntroAttachment(messages)),
