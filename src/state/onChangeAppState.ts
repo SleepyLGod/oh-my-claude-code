@@ -1,4 +1,6 @@
 import { setMainLoopModelOverride } from '../bootstrap/state.js'
+import { getActiveLLMProfileName } from '../services/llm/config.js'
+import { buildLLMSelectionSettingsPatch } from '../services/llm/selection.js'
 import {
   clearApiKeyHelperCache,
   clearAwsCredentialsCache,
@@ -17,7 +19,10 @@ import {
   notifySessionMetadataChanged,
   type SessionExternalMetadata,
 } from '../utils/sessionState.js'
-import { updateSettingsForSource } from '../utils/settings/settings.js'
+import {
+  getSettings_DEPRECATED,
+  updateSettingsForSource,
+} from '../utils/settings/settings.js'
 import type { AppState } from './AppStateStore.js'
 
 // Inverse of the push below — restore on worker restart.
@@ -91,23 +96,15 @@ export function onChangeAppState({
     notifyPermissionModeChanged(newMode)
   }
 
-  // mainLoopModel: remove it from settings?
-  if (
-    newState.mainLoopModel !== oldState.mainLoopModel &&
-    newState.mainLoopModel === null
-  ) {
-    // Remove from settings
-    updateSettingsForSource('userSettings', { model: undefined })
-    setMainLoopModelOverride(null)
-  }
-
-  // mainLoopModel: add it to settings?
-  if (
-    newState.mainLoopModel !== oldState.mainLoopModel &&
-    newState.mainLoopModel !== null
-  ) {
-    // Save to settings
-    updateSettingsForSource('userSettings', { model: newState.mainLoopModel })
+  if (newState.mainLoopModel !== oldState.mainLoopModel) {
+    const currentSettings = getSettings_DEPRECATED() || {}
+    updateSettingsForSource(
+      'userSettings',
+      buildLLMSelectionSettingsPatch(currentSettings, {
+        profileName: getActiveLLMProfileName(currentSettings),
+        model: newState.mainLoopModel,
+      }),
+    )
     setMainLoopModelOverride(newState.mainLoopModel)
   }
 

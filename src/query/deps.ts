@@ -1,7 +1,8 @@
 import { randomUUID } from 'crypto'
-import { queryModelWithStreaming } from '../services/api/claude.js'
 import { autoCompactIfNeeded } from '../services/compact/autoCompact.js'
 import { microcompactMessages } from '../services/compact/microCompact.js'
+import { getLLMClient } from '../services/llm/factory.js'
+import type { LLMClient } from '../services/llm/types.js'
 
 // -- deps
 
@@ -20,7 +21,7 @@ import { microcompactMessages } from '../services/compact/microCompact.js'
 // PRs can add runTools, handleStopHooks, logEvent, queue ops, etc.
 export type QueryDeps = {
   // -- model
-  callModel: typeof queryModelWithStreaming
+  callModel: LLMClient['streamMainQuery']
 
   // -- compaction
   microcompact: typeof microcompactMessages
@@ -31,8 +32,9 @@ export type QueryDeps = {
 }
 
 export function productionDeps(): QueryDeps {
+  const client = getLLMClient()
   return {
-    callModel: queryModelWithStreaming,
+    callModel: client.streamMainQuery.bind(client),
     microcompact: microcompactMessages,
     autocompact: autoCompactIfNeeded,
     uuid: randomUUID,

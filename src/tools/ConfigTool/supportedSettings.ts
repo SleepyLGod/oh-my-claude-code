@@ -1,4 +1,5 @@
 import { feature } from 'bun:bundle'
+import { getLLMProfileNames } from '../../services/llm/config.js'
 import { getRemoteControlAtStartup } from '../../utils/config.js'
 import {
   EDITOR_MODES,
@@ -103,6 +104,12 @@ export const SUPPORTED_SETTINGS: Record<string, SettingConfig> = {
     },
     validateOnWrite: v => validateModel(String(v)),
     formatOnRead: v => (v === null ? 'default' : v),
+  },
+  'llm.providerProfile': {
+    source: 'settings',
+    type: 'string',
+    description: 'Active LLM provider profile',
+    getOptions: () => getLLMProfileNames(),
   },
   alwaysThinkingEnabled: {
     source: 'settings',

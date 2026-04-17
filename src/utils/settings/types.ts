@@ -84,6 +84,42 @@ export const PermissionsSchema = lazySchema(() =>
     .passthrough(),
 )
 
+export const LLMProfileSchema = lazySchema(() =>
+  z.object({
+    type: z
+      .enum(['anthropic', 'openai_compat', 'mock'])
+      .describe('LLM provider implementation for this profile'),
+    baseURL: z
+      .string()
+      .optional()
+      .describe('Base URL for OpenAI-compatible providers'),
+    apiKeyEnv: z
+      .string()
+      .optional()
+      .describe('Environment variable name containing the API key'),
+    defaultModel: z
+      .string()
+      .optional()
+      .describe('Default model for this provider profile'),
+    headers: z
+      .record(z.string(), z.string())
+      .optional()
+      .describe('Static HTTP headers to send with requests for this profile'),
+    displayName: z
+      .string()
+      .optional()
+      .describe('Friendly label shown in the UI for this provider profile'),
+    suggestedModels: z
+      .array(z.string())
+      .optional()
+      .describe('Suggested models surfaced in the UI for this profile'),
+    streaming: z
+      .enum(['auto', 'enabled', 'disabled'])
+      .optional()
+      .describe('Streaming behavior for OpenAI-compatible providers'),
+  }),
+)
+
 /**
  * Schema for extra marketplaces defined in repository settings
  * Same as KnownMarketplace but without lastUpdated (which is managed automatically)
@@ -396,6 +432,19 @@ export const SettingsSchema = lazySchema(() =>
             'model ID (e.g. a Bedrock inference profile ARN). Typically set in managed settings by ' +
             'enterprise administrators.',
         ),
+      llm: z
+        .object({
+          providerProfile: z
+            .string()
+            .optional()
+            .describe('Active LLM provider profile name'),
+          profiles: z
+            .record(z.string(), LLMProfileSchema())
+            .optional()
+            .describe('Named LLM provider profiles'),
+        })
+        .optional()
+        .describe('Multi-provider LLM configuration'),
       // Whether to automatically approve all MCP servers in the project
       enableAllProjectMcpServers: z
         .boolean()

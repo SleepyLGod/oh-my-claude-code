@@ -44,6 +44,7 @@ import {
   dequeue,
   dequeueAllMatching,
   enqueue,
+  getCommandQueue,
   hasCommandsInQueue,
   peek,
   subscribeToCommandQueue,
@@ -253,6 +254,7 @@ import {
   isQualifiedForGrove,
   checkGroveForNonInteractive,
 } from 'src/services/api/grove.js'
+import { getResolvedLLMProfile } from 'src/services/llm/config.js'
 import {
   toInternalMessages,
   toSDKRateLimitInfo,
@@ -554,8 +556,15 @@ export async function runHeadless(
   headlessProfilerStartTurn()
   headlessProfilerCheckpoint('runHeadless_entry')
 
-  // Check Grove requirements for non-interactive consumer subscribers
-  if (await isQualifiedForGrove()) {
+  // Grove is an Anthropic consumer-policy surface. In bare mode and with
+  // non-Anthropic profiles, this networked preflight just blocks headless
+  // startup without affecting the actual provider being used.
+  const activeLLMProfile = getResolvedLLMProfile()
+  if (
+    !isBareMode() &&
+    activeLLMProfile.type === 'anthropic' &&
+    (await isQualifiedForGrove())
+  ) {
     await checkGroveForNonInteractive()
   }
   headlessProfilerCheckpoint('after_grove_check')
@@ -1922,6 +1931,32 @@ function runHeadlessStreaming(
     // Defined outside the try block so it's accessible in the post-finally
     // queue re-checks at the bottom of run().
     const isMainThread = (cmd: QueuedCommand) => cmd.agentId === undefined
+    const getBlockingBackgroundTasks = () =>
+      getRunningTasks(getAppState()).flatMap(task => {
+        if (!isBackgroundTask(task) || task.type === 'in_process_teammate') {
+          return []
+        }
+        if (!('id' in task) || typeof task.id !== 'string') {
+          return []
+        }
+        return [{ id: task.id, type: task.type }]
+      })
+    const initialBackgroundTaskIds = new Set(
+      getBlockingBackgroundTasks().map(task => task.id),
+    )
+    const initialMainThreadCommands = new Set(
+      getCommandQueue().filter(isMainThread),
+    )
+    const getPostPromptBlockingBackgroundTasks = () =>
+      getBlockingBackgroundTasks().filter(
+        task => !initialBackgroundTaskIds.has(task.id),
+      )
+    const getPostPromptQueuedMainThreadCommands = () =>
+      getCommandQueue().filter(
+        command =>
+          isMainThread(command) && !initialMainThreadCommands.has(command),
+      )
+    let lastWaitBlockerSignature: string | null = null
 
     try {
       let command: QueuedCommand | undefined
@@ -2220,15 +2255,9 @@ function runHeadlessStreaming(
                 }
 
                 // Hold-back: don't emit result while background agents are running
-                const currentState = getAppState()
-                if (
-                  getRunningTasks(currentState).some(
-                    t =>
-                      (t.type === 'local_agent' ||
-                        t.type === 'local_workflow') &&
-                      isBackgroundTask(t),
-                  )
-                ) {
+                const blockingBackgroundTasks =
+                  getPostPromptBlockingBackgroundTasks()
+                if (blockingBackgroundTasks.length > 0) {
                   heldBackResult = message
                 } else {
                   heldBackResult = null
@@ -2388,19 +2417,48 @@ function runHeadlessStreaming(
         // doesn't hit this.
         waitingForAgents = false
         {
-          const state = getAppState()
-          const hasRunningBg = getRunningTasks(state).some(
-            t => isBackgroundTask(t) && t.type !== 'in_process_teammate',
-          )
-          const hasMainThreadQueued = peek(isMainThread) !== undefined
+          const postPromptBackgroundTasks =
+            getPostPromptBlockingBackgroundTasks()
+          const postPromptQueuedCommands =
+            getPostPromptQueuedMainThreadCommands()
+          const hasRunningBg = postPromptBackgroundTasks.length > 0
+          const hasMainThreadQueued = postPromptQueuedCommands.length > 0
           if (hasRunningBg || hasMainThreadQueued) {
             waitingForAgents = true
+            const blockerSignature = JSON.stringify({
+              backgroundTaskIds: postPromptBackgroundTasks.map(task => task.id),
+              queuedCommandUuids: postPromptQueuedCommands.map(
+                command => command.uuid ?? 'no-uuid',
+              ),
+            })
+            if (blockerSignature !== lastWaitBlockerSignature) {
+              lastWaitBlockerSignature = blockerSignature
+              logForDiagnosticsNoPII(
+                'info',
+                'headless_waiting_for_post_prompt_work',
+                {
+                  background_tasks: postPromptBackgroundTasks.reduce<
+                    Record<string, number>
+                  >((acc, task) => {
+                    acc[task.type] = (acc[task.type] ?? 0) + 1
+                    return acc
+                  }, {}),
+                  queued_commands: postPromptQueuedCommands.map(command => ({
+                    mode: command.mode,
+                    priority: command.priority ?? 'next',
+                    uuid: command.uuid ?? null,
+                  })),
+                },
+              )
+            }
             if (!hasMainThreadQueued) {
               runPhase = 'waiting_for_agents'
               // No commands ready yet, wait for tasks to complete
               await sleep(100)
             }
             // Loop back to drain any newly queued commands
+          } else {
+            lastWaitBlockerSignature = null
           }
         }
       } while (waitingForAgents)
