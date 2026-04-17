@@ -36,6 +36,7 @@ The table below reflects the runtime-visible commands returned by `getCommands()
 | `/add-dir` | - | `<path>` | `local-jsx` | `visible` | Add another working directory to the current session. |
 | `/agents` | - | - | `local-jsx` | `visible` | Manage configured agents. |
 | `/branch` | `fork` | `[name]` | `local-jsx` | `visible` | Fork the conversation into a new branch. |
+| `/buddy` | - | `[status\|hatch\|pet\|mute\|unmute]` | `local` | `visible` | Manage the local companion pet in this fork. |
 | `/btw` | - | `<question>` | `local-jsx` | `visible` | Ask a side question without interrupting the main thread. |
 | `/clear` | `reset`, `new` | - | `local` | `visible` | Clear the current conversation history. |
 | `/color` | - | `<color\|default>` | `local-jsx` | `visible` | Set the prompt bar color for the session. |
@@ -133,6 +134,7 @@ source tree.
 | --- | --- | --- |
 | `/model` | usable, modified | Provider-aware in this fork. Supports switching provider profiles and models, not just Anthropic model aliases. |
 | `/login` | usable, modified | The interactive flow now includes Anthropic account login, Claude via supported cloud platforms, and OpenAI-compatible provider profile selection. |
+| `/buddy` | usable, modified | Fork-specific local command that exposes the existing companion subsystem. Hatch, pet, and mute state are local and deterministic; no model call is used. |
 | `/mcp` | usable as a manager | The management UI is present, but some specific MCP backends in this tree are restored compatibility shims rather than original implementations. |
 | `/chrome` | partial | The Claude in Chrome MCP backend is a restored compatibility shim. Browser actions are explicitly unavailable in this workspace. |
 | `computer-use` integrations | partial | The Computer Use MCP stack preserves tool wiring and permission flows, but native desktop execution is explicitly unavailable or reduced in the restored shims. |
