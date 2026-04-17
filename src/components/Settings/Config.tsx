@@ -18,6 +18,7 @@ import { logEvent, type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPAT
 import { isBridgeEnabled } from '../../bridge/bridgeEnabled.js';
 import { ThemePicker } from '../ThemePicker.js';
 import { useAppState, useSetAppState, useAppStateStore } from '../../state/AppState.js';
+import { MultiProviderModelPicker } from '../MultiProviderModelPicker.js';
 import { ModelPicker } from '../ModelPicker.js';
 import { modelDisplayString, isOpus1mMergeEnabled } from '../../utils/model/model.js';
 import { isBilledAsExtraUsage } from '../../utils/extraUsage.js';
@@ -48,6 +49,8 @@ import { useSearchInput } from '../../hooks/useSearchInput.js';
 import { useTerminalSize } from '../../hooks/useTerminalSize.js';
 import { clearFastModeCooldown, FAST_MODE_MODEL_DISPLAY, isFastModeAvailable, isFastModeEnabled, getFastModeModel, isFastModeSupportedByModel } from '../../utils/fastMode.js';
 import { isFullscreenEnvEnabled } from '../../utils/fullscreen.js';
+import { getActiveLLMProfileName, getLLMProfileDisplayName } from '../../services/llm/config.js';
+import { buildLLMSelectionSettingsPatch } from '../../services/llm/selection.js';
 type Props = {
   onClose: (result?: string, options?: {
     display?: CommandResultDisplay;
@@ -200,8 +203,13 @@ export function Config({
   const memoryFiles = React.use(getMemoryFiles(true));
   const shouldShowExternalIncludesToggle = hasExternalClaudeMdIncludes(memoryFiles);
   const autoUpdaterDisabledReason = getAutoUpdaterDisabledReason();
-  function onChangeMainModelConfig(value: string | null): void {
+  function onChangeMainModelConfig(profileName: string, value: string | null): void {
     const previousModel = mainLoopModel;
+    const currentSettings = getInitialSettings();
+    updateSettingsForSource('userSettings', buildLLMSelectionSettingsPatch(currentSettings, {
+      profileName,
+      model: value
+    }));
     logEvent('tengu_config_model_changed', {
       from_model: previousModel as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
       to_model: value as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS
@@ -212,7 +220,7 @@ export function Config({
       mainLoopModelForSession: null
     }));
     setChanges(prev_0 => {
-      const valStr = modelDisplayString(value) + (isBilledAsExtraUsage(value, false, isOpus1mMergeEnabled()) ? ' · Billed as extra usage' : '');
+      const valStr = `${getLLMProfileDisplayName(profileName)} · ${value === null ? 'default' : modelDisplayString(value)}` + (isBilledAsExtraUsage(value, false, isOpus1mMergeEnabled()) ? ' · Billed as extra usage' : '');
       if ('model' in prev_0) {
         const {
           model,
@@ -220,12 +228,14 @@ export function Config({
         } = prev_0;
         return {
           ...rest,
-          model: valStr
+          model: valStr,
+          providerProfile: getLLMProfileDisplayName(profileName)
         };
       }
       return {
         ...prev_0,
-        model: valStr
+        model: valStr,
+        providerProfile: getLLMProfileDisplayName(profileName)
       };
     });
   }
@@ -810,9 +820,9 @@ export function Config({
   }, {
     id: 'model',
     label: 'Model',
-    value: mainLoopModel === null ? 'Default (recommended)' : mainLoopModel,
+    value: `${getLLMProfileDisplayName(getActiveLLMProfileName())} · ${mainLoopModel === null ? 'default' : mainLoopModel}`,
     type: 'managedEnum' as const,
-    onChange: onChangeMainModelConfig
+    onChange: () => {}
   }, ...(isConnectedToIde ? [{
     id: 'diffTool',
     label: 'Diff tool',
@@ -1204,6 +1214,8 @@ export function Config({
       autoUpdatesChannel: iu?.autoUpdatesChannel,
       minimumVersion: iu?.minimumVersion,
       language: iu?.language,
+      model: iu?.model,
+      llm: iu?.llm,
       ...(feature('TRANSCRIPT_CLASSIFIER') ? {
         useAutoModeDuringPlan: (iu as {
           useAutoModeDuringPlan?: boolean;
@@ -1467,9 +1479,9 @@ export function Config({
             </Text>
           </Box>
         </> : showSubmenu === 'Model' ? <>
-          <ModelPicker initial={mainLoopModel} onSelect={(model_0, _effort) => {
+          <MultiProviderModelPicker initialModel={mainLoopModel} currentProfileName={getActiveLLMProfileName()} onSelect={(profileName, model_0, _effort) => {
         isDirty.current = true;
-        onChangeMainModelConfig(model_0);
+        onChangeMainModelConfig(profileName, model_0);
         setShowSubmenu(null);
         setTabsHidden(false);
       }} onCancel={() => {

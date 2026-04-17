@@ -1,6 +1,8 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { getIsNonInteractiveSession } from '../bootstrap/state.js'
 import { verifyApiKey } from '../services/api/claude.js'
+import { getResolvedLLMProfileByName } from '../services/llm/config.js'
+import { useSettings } from './useSettings.js'
 import {
   getAnthropicApiKeyWithSource,
   getApiKeyFromApiKeyHelper,
@@ -21,27 +23,75 @@ export type ApiKeyVerificationResult = {
   error: Error | null
 }
 
-export function useApiKeyVerification(): ApiKeyVerificationResult {
-  const [status, setStatus] = useState<VerificationStatus>(() => {
-    if (!isAnthropicAuthEnabled() || isClaudeAISubscriber()) {
-      return 'valid'
-    }
-    // Use skipRetrievingKeyFromApiKeyHelper to avoid executing apiKeyHelper
-    // before trust dialog is shown (security: prevents RCE via settings.json)
-    const { key, source } = getAnthropicApiKeyWithSource({
-      skipRetrievingKeyFromApiKeyHelper: true,
-    })
-    // If apiKeyHelper is configured, we have a key source even though we
-    // haven't executed it yet - return 'loading' to indicate we'll verify later
-    if (key || source === 'apiKeyHelper') {
-      return 'loading'
-    }
-    return 'missing'
+function getVerificationStatusForProfile(
+  settings: ReturnType<typeof useSettings>,
+): VerificationStatus {
+  const profileName = settings.llm?.providerProfile || 'anthropic'
+  const profile = getResolvedLLMProfileByName(profileName, settings)
+
+  if (profile.type === 'mock') {
+    return 'valid'
+  }
+
+  if (profile.type === 'openai_compat') {
+    return profile.apiKeyEnv && process.env[profile.apiKeyEnv] ? 'valid' : 'missing'
+  }
+
+  if (!isAnthropicAuthEnabled() || isClaudeAISubscriber()) {
+    return 'valid'
+  }
+
+  // Use skipRetrievingKeyFromApiKeyHelper to avoid executing apiKeyHelper
+  // before trust dialog is shown (security: prevents RCE via settings.json)
+  const { key, source } = getAnthropicApiKeyWithSource({
+    skipRetrievingKeyFromApiKeyHelper: true,
   })
+
+  // If apiKeyHelper is configured, we have a key source even though we
+  // haven't executed it yet - return 'loading' to indicate we'll verify later
+  if (key || source === 'apiKeyHelper') {
+    return 'loading'
+  }
+
+  return 'missing'
+}
+
+export function useApiKeyVerification(): ApiKeyVerificationResult {
+  const settings = useSettings()
+  const activeProfileName = settings.llm?.providerProfile || 'anthropic'
+  const activeProfile = useMemo(
+    () => getResolvedLLMProfileByName(activeProfileName, settings),
+    [activeProfileName, settings],
+  )
+  const [status, setStatus] = useState<VerificationStatus>(() =>
+    getVerificationStatusForProfile(settings),
+  )
   const [error, setError] = useState<Error | null>(null)
 
+  useEffect(() => {
+    setStatus(getVerificationStatusForProfile(settings))
+    setError(null)
+  }, [settings, activeProfileName])
+
   const verify = useCallback(async (): Promise<void> => {
+    if (activeProfile.type === 'mock') {
+      setError(null)
+      setStatus('valid')
+      return
+    }
+
+    if (activeProfile.type === 'openai_compat') {
+      setError(null)
+      setStatus(
+        activeProfile.apiKeyEnv && process.env[activeProfile.apiKeyEnv]
+          ? 'valid'
+          : 'missing',
+      )
+      return
+    }
+
     if (!isAnthropicAuthEnabled() || isClaudeAISubscriber()) {
+      setError(null)
       setStatus('valid')
       return
     }
@@ -55,6 +105,7 @@ export function useApiKeyVerification(): ApiKeyVerificationResult {
         setError(new Error('API key helper did not return a valid key'))
         return
       }
+      setError(null)
       const newStatus = 'missing'
       setStatus(newStatus)
       return
@@ -74,7 +125,7 @@ export function useApiKeyVerification(): ApiKeyVerificationResult {
       setStatus(newStatus)
       return
     }
-  }, [])
+  }, [activeProfile])
 
   return {
     status,

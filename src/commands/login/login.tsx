@@ -10,12 +10,17 @@ import { Dialog } from '../../components/design-system/Dialog.js';
 import { useMainLoopModel } from '../../hooks/useMainLoopModel.js';
 import { Text } from '../../ink.js';
 import { refreshGrowthBookAfterAuthChange } from '../../services/analytics/growthbook.js';
+import {
+  getActiveLLMProfileName,
+  getResolvedLLMProfileByName,
+} from '../../services/llm/config.js';
 import { refreshPolicyLimits } from '../../services/policyLimits/index.js';
 import { refreshRemoteManagedSettings } from '../../services/remoteManagedSettings/index.js';
 import type { LocalJSXCommandOnDone } from '../../types/command.js';
 import { stripSignatureBlocks } from '../../utils/messages.js';
 import { checkAndDisableAutoModeIfNeeded, checkAndDisableBypassPermissionsIfNeeded, resetAutoModeGateCheck, resetBypassPermissionsCheck } from '../../utils/permissions/bypassPermissionsKillswitch.js';
 import { resetUserCache } from '../../utils/user.js';
+import { getSettings_DEPRECATED } from '../../utils/settings/settings.js';
 export async function call(onDone: LocalJSXCommandOnDone, context: LocalJSXCommandContext): Promise<React.ReactNode> {
   return <Login onDone={async success => {
     context.onChangeAPIKey();
@@ -48,9 +53,17 @@ export async function call(onDone: LocalJSXCommandOnDone, context: LocalJSXComma
         resetAutoModeGateCheck();
         void checkAndDisableAutoModeIfNeeded(appState.toolPermissionContext, context.setAppState, appState.fastMode);
       }
+      const currentSettings = getSettings_DEPRECATED() || {};
+      const activeProfile = getResolvedLLMProfileByName(getActiveLLMProfileName(currentSettings), currentSettings);
       // Increment authVersion to trigger re-fetching of auth-dependent data in hooks (e.g., MCP servers)
       context.setAppState(prev => ({
         ...prev,
+        ...(activeProfile.type === 'anthropic'
+          ? {}
+          : {
+              mainLoopModel: null,
+              mainLoopModelForSession: null
+            }),
         authVersion: prev.authVersion + 1
       }));
     }
