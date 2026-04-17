@@ -16,4 +16,8 @@ coverage/
 .claude/
 .idea/
 .vscode/
+
 /docs/.nvimlog
+/docs/*zh-CN.md
+
+.env
