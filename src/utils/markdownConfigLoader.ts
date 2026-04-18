@@ -558,20 +558,34 @@ async function loadMarkdownFiles(dir: string): Promise<
   const useNative = isEnvTruthy(process.env.CLAUDE_CODE_USE_NATIVE_FILE_SEARCH)
   const signal = AbortSignal.timeout(3000)
   let files: string[]
-  try {
-    files = useNative
-      ? await findMarkdownFilesNative(dir, signal)
-      : await ripGrep(
-          ['--files', '--hidden', '--follow', '--no-ignore', '--glob', '*.md'],
-          dir,
-          signal,
-        )
-  } catch (e: unknown) {
-    // Handle missing/inaccessible dir directly instead of pre-checking
-    // existence (TOCTOU). findMarkdownFilesNative already catches internally;
-    // ripGrep rejects on inaccessible target paths.
-    if (isFsInaccessible(e)) return []
-    throw e
+
+  if (useNative) {
+    // User explicitly requested native search
+    try {
+      files = await findMarkdownFilesNative(dir, signal)
+    } catch (e: unknown) {
+      // Handle missing/inaccessible dir directly instead of pre-checking
+      // existence (TOCTOU). findMarkdownFilesNative already catches internally;
+      // ripGrep rejects on inaccessible target paths.
+      if (isFsInaccessible(e)) return []
+      throw e
+    }
+  } else {
+    // Default: try ripgrep first, fall back to native on failure or empty results
+    try {
+      files = await ripGrep(
+        ['--files', '--hidden', '--follow', '--no-ignore', '--glob', '*.md'],
+        dir,
+        signal,
+      )
+      // Ripgrep succeeded but may return empty results in some environments
+      if (files.length === 0) {
+        files = await findMarkdownFilesNative(dir, AbortSignal.timeout(3000))
+      }
+    } catch {
+      // Ripgrep failed (threw an error), fall back to native
+      files = await findMarkdownFilesNative(dir, AbortSignal.timeout(3000))
+    }
   }
 
   const results = await Promise.all(

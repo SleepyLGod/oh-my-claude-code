@@ -39,7 +39,7 @@ The table below reflects the runtime-visible commands returned by `getCommands()
 | `/buddy` | - | `[status\|hatch\|pet\|mute\|unmute]` | `local` | `visible` | Manage the local companion pet in this fork. |
 | `/btw` | - | `<question>` | `local-jsx` | `visible` | Ask a side question without interrupting the main thread. |
 | `/clear` | `reset`, `new` | - | `local` | `visible` | Clear the current conversation history. |
-| `/color` | - | `<color\|default>` | `local-jsx` | `visible` | Set the prompt bar color for the session. |
+| `/color` | - | `<color\|rainbow\|default>` | `local-jsx` | `visible` | Set the prompt bar color for the session. |
 | `/compact` | - | `<optional custom summarization instructions>` | `local` | `visible` | Compact history into a summary that stays in context. |
 | `/config` | `settings` | - | `local-jsx` | `visible` | Open the config panel. |
 | `/copy` | - | - | `local-jsx` | `visible` | Copy Claude’s last response to the clipboard. |
@@ -50,6 +50,7 @@ The table below reflects the runtime-visible commands returned by `getCommands()
 | `/effort` | - | `[low\|medium\|high\|max\|auto]` | `local-jsx` | `visible` | Set model effort level. |
 | `/exit` | `quit` | - | `local-jsx` | `visible` | Exit the REPL. |
 | `/fast` | - | `[on\|off]` | `local-jsx` | `visible` | Toggle fast mode when supported. |
+| `/files` | - | - | `local` | `visible` | List the files currently loaded into context. |
 | `/help` | - | - | `local-jsx` | `visible` | Show help and command listings. |
 | `/ide` | - | `[open]` | `local-jsx` | `visible` | Manage IDE integrations and show status. |
 | `/init` | - | - | `prompt` | `visible` | Generate a `CLAUDE.md` file for the repo. |
@@ -84,6 +85,8 @@ The table below reflects the runtime-visible commands returned by `getCommands()
 | `/logout` | - | - | `local-jsx` | `visible` | Sign out from Anthropic. |
 | `/login` | - | - | `local-jsx` | `visible` | Open the account/provider sign-in flow. |
 | `/tasks` | `bashes` | - | `local-jsx` | `visible` | List and manage background tasks. |
+| `/tag` | - | `<tag-name>` | `local-jsx` | `visible` | Toggle a searchable tag on the current session. |
+| `/version` | - | - | `local` | `visible` | Print the exact version of the running session. |
 
 ## Bundled Skills
 
@@ -120,6 +123,25 @@ These commands are implemented in the restored external build but hidden from no
 | `/passes` | `local-jsx` | Invite/share-a-week flow. |
 
 Other commands such as `/session`, `/remote-control`, `/voice`, `/desktop`, `/advisor`, `/context` non-interactive variants, and several bridge/remote helpers are implemented in source but are feature-gated, auth-gated, environment-gated, or hidden by current runtime conditions, so they do not appear in the standard external command list above.
+
+## Gated Commands
+
+These commands are implemented in the tree but only appear when account type,
+provider, runtime mode, feature flags, or platform support allow them.
+
+| Command | Kind | Status | Notes |
+| --- | --- | --- | --- |
+| `/advisor` | `local` | `gated` | Available only when advisor support is enabled for the current Anthropic-compatible setup. |
+| `/desktop` | `local-jsx` | `gated` | Claude Desktop handoff. Requires `claude-ai` availability and a supported desktop platform. |
+| `/extra-usage` | `local-jsx` / `local` | `gated` | Extra-usage provisioning UI and non-interactive variant. Only available when overage provisioning is allowed. |
+| `/install-slack-app` | `local` | `gated` | Slack app installation flow. Requires `claude-ai` availability. |
+| `/keybindings` | `local` | `gated` | Opens the user keybindings file when keybinding customization is enabled. |
+| `/privacy-settings` | `local-jsx` | `gated` | Consumer privacy controls UI. Requires a qualifying subscriber account. |
+| `/remote-env` | `local-jsx` | `gated` | Configure the default remote environment. Requires remote-session policy access. |
+| `/session` | `local-jsx` | `gated` | Shows the remote session URL and QR code. Only appears in remote mode. |
+| `/upgrade` | `local-jsx` | `gated` | Upgrade flow for Claude subscription plans. Requires `claude-ai` availability. |
+| `/usage` | `local-jsx` | `gated` | Usage limits/settings UI. Requires `claude-ai` availability. |
+| `/voice` | `local` | `gated` | Voice mode toggle. Requires the feature gate and supported voice runtime conditions. |
 
 ## Restoration and Compatibility Notes
 
@@ -169,7 +191,6 @@ These are declared in `INTERNAL_ONLY_COMMANDS` and are only available in interna
 | `/commit-push-pr` | `prompt` | `internal` | Commit, push, and open a pull request. |
 | `/init-verifiers` | `prompt` | `internal` | Create verifier skills for automated change verification. |
 | `/bridge-kick` | `local` | `internal` | Inject bridge failure states for recovery testing. |
-| `/version` | `local` | `internal` | Print the exact running session version. |
 
 The restored tree also contains additional internal placeholders/stubs beyond
 the table above. Those should not be treated as usable commands.
@@ -179,3 +200,67 @@ the table above. Those should not be treated as usable commands.
 - Command availability is dynamic. `getCommands()` filters on auth state, provider requirements, feature flags, and `isEnabled()` callbacks.
 - Some descriptions are runtime-dependent. `/model`, `/sandbox`, and fast-mode related commands can vary their text based on the current environment.
 - This repository is a restored source tree. A command being listed here means a command object exists and is wired into the CLI, not that every downstream dependency is fully restored.
+- This repository also ships non-active reference templates for a user command pack under `docs/command-templates/`. The active copies are intended to live in `~/.claude/commands/`, not `.claude/commands/`, to avoid name collisions between user and project custom commands.
+
+## User Command Pack
+
+This fork also uses a user-level custom command pack outside the repository:
+
+- Active user commands: `~/.claude/commands/`
+- Project reference templates: `docs/command-templates/`
+
+The repository copies are documentation templates only. They are not meant to
+be activated alongside same-name user commands, because user-level and
+project-level custom commands can shadow each other.
+
+To sync the current template pack into `~/.claude/commands/`, run:
+
+```bash
+./docs/command-templates/sync-active-commands.sh
+```
+
+The pack is intentionally split into:
+
+- read-only analysis commands
+- explicit mutation commands
+
+This follows the official Claude Code guidance to separate exploration and
+planning from implementation, instead of relying on prompt wording like "do
+not edit yet" inside a mutation-oriented command.
+
+All commands in the pack are intended to be `disable-model-invocation: true`,
+so they run only when the user explicitly invokes them.
+
+### Read-only commands
+
+These commands are designed to diagnose, review, summarize, or plan without
+editing files. Heavy commands should run in a forked context with a read-only
+agent such as `Explore`.
+
+| Command | Purpose |
+| --- | --- |
+| `/summarize-diff` | Summarize the current diff for status, commit, PR, or changelog use. |
+| `/codebase-map` | Map a subsystem, its files, flow, and likely change points. |
+| `/hard-review` | Perform a findings-first review without editing files. |
+| `/deep-debug` | Diagnose a bug to a likely root cause and proposed fix without editing. |
+| `/test-focus` | Choose and run the smallest meaningful verification without editing files. |
+| `/implement-plan-draft` | Draft a concrete implementation plan without editing files. |
+| `/refactor-safely-analyze` | Define a safe refactor boundary and verification plan without editing. |
+| `/autofix-pr-review` | Triage PR feedback and propose fixes without editing. |
+
+### Mutation commands
+
+These commands are the only commands in the pack that are intended to modify
+code. They should use explicit mutation-oriented names and must report concrete
+verification.
+
+| Command | Purpose |
+| --- | --- |
+| `/deep-fix` | Apply the smallest correct fix for a diagnosed issue and verify it. |
+| `/implement-plan` | Implement a scoped, already-clear plan and verify it. |
+| `/refactor-safely` | Perform a behavior-preserving refactor and verify it. |
+| `/autofix-pr` | Apply actionable PR-review fixes and verify them. |
+
+If you want to reuse one of the templates as a project-specific active command,
+copy it into `.claude/commands/` and rename it or adapt its semantics so it
+does not collide with an active command of the same name in `~/.claude/commands/`.
