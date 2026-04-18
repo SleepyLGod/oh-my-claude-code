@@ -35,7 +35,7 @@ type SwarmBannerInfo = {
  * Hook that returns banner information for swarm, standalone agent, or --agent CLI context.
  * - Leader (not in tmux): Returns "tmux -L ... attach" command with cyan background
  * - Leader (in tmux / in-process): Falls through to standalone-agent check — shows
- *   /rename name + /color background if set, else null
+ *   /rename name banner if set, else null
  * - Teammate: Returns "teammate@team" format with their assigned color background
  * - Viewing a background agent (CoordinatorTaskPanel): Returns agent name with its color
  * - Standalone agent: Returns agent name with their color background (no @team)
@@ -121,12 +121,12 @@ export function useSwarmBanner(): SwarmBannerInfo {
     }
   }
 
-  // Standalone agent (/rename, /color): name and/or custom color, no @team.
+  // Standalone agent (/rename): name with optional custom color, no @team.
   const standaloneName = getStandaloneAgentName(state)
   const standaloneColor = standaloneAgentContext?.color
-  if (standaloneName || standaloneColor) {
+  if (standaloneName) {
     return {
-      text: standaloneName ?? '',
+      text: standaloneName,
       bgColor: toThemeColor(standaloneColor),
     }
   }
