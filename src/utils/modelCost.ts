@@ -86,6 +86,49 @@ export const COST_HAIKU_45 = {
   webSearchRequests: 0.01,
 } as const satisfies ModelCosts
 
+// DeepSeek pricing is per 1M tokens and distinguishes prompt cache hits from misses.
+export const COST_DEEPSEEK_CHAT = {
+  inputTokens: 0.28,
+  outputTokens: 0.42,
+  promptCacheWriteTokens: 0.28,
+  promptCacheReadTokens: 0.028,
+  webSearchRequests: 0,
+} as const satisfies ModelCosts
+
+export const COST_DEEPSEEK_REASONER = {
+  inputTokens: 0.55,
+  outputTokens: 2.19,
+  promptCacheWriteTokens: 0.55,
+  promptCacheReadTokens: 0.14,
+  webSearchRequests: 0,
+} as const satisfies ModelCosts
+
+// Qwen pricing below uses the Chinese Mainland compatible-mode endpoint
+// currently configured for this fork's builtin qwen profile.
+export const COST_QWEN_PLUS = {
+  inputTokens: 0.115,
+  outputTokens: 0.287,
+  promptCacheWriteTokens: 0.115,
+  promptCacheReadTokens: 0.115,
+  webSearchRequests: 0,
+} as const satisfies ModelCosts
+
+export const COST_QWEN_TURBO = {
+  inputTokens: 0.044,
+  outputTokens: 0.087,
+  promptCacheWriteTokens: 0.044,
+  promptCacheReadTokens: 0.044,
+  webSearchRequests: 0,
+} as const satisfies ModelCosts
+
+export const COST_QWEN_MAX = {
+  inputTokens: 0.345,
+  outputTokens: 1.377,
+  promptCacheWriteTokens: 0.345,
+  promptCacheReadTokens: 0.345,
+  webSearchRequests: 0,
+} as const satisfies ModelCosts
+
 const DEFAULT_UNKNOWN_MODEL_COST = COST_TIER_5_25
 
 /**
@@ -123,6 +166,11 @@ export const MODEL_COSTS: Record<ModelShortName, ModelCosts> = {
     COST_TIER_5_25,
   [firstPartyNameToCanonical(CLAUDE_OPUS_4_6_CONFIG.firstParty)]:
     COST_TIER_5_25,
+  'deepseek-chat': COST_DEEPSEEK_CHAT,
+  'deepseek-reasoner': COST_DEEPSEEK_REASONER,
+  'qwen-plus': COST_QWEN_PLUS,
+  'qwen-turbo': COST_QWEN_TURBO,
+  'qwen-max': COST_QWEN_MAX,
 }
 
 /**
@@ -154,6 +202,15 @@ export function getModelCosts(model: string, usage: Usage): ModelCosts {
 
   const costs = MODEL_COSTS[shortName]
   if (!costs) {
+    if (shortName.startsWith('qwen-plus')) {
+      return COST_QWEN_PLUS
+    }
+    if (shortName.startsWith('qwen-turbo')) {
+      return COST_QWEN_TURBO
+    }
+    if (shortName.startsWith('qwen-max')) {
+      return COST_QWEN_MAX
+    }
     trackUnknownModelCost(model, shortName)
     return (
       MODEL_COSTS[getCanonicalName(getDefaultMainLoopModelSetting())] ??

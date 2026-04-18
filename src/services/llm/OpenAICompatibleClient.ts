@@ -1,10 +1,13 @@
 import { randomUUID } from 'crypto'
+import type { BetaUsage as Usage } from '@anthropic-ai/sdk/resources/beta/messages/messages.mjs'
 import { getSessionId } from 'src/bootstrap/state.js'
+import { addToTotalSessionCost } from 'src/cost-tracker.js'
 import { getUserAgent } from 'src/utils/http.js'
 import { createAssistantMessage } from 'src/utils/messages.js'
 import { normalizeMessagesForAPI } from 'src/utils/messages.js'
 import { safeParseJSON } from 'src/utils/json.js'
 import { toolToAPISchema } from 'src/utils/api.js'
+import { calculateUSDCost } from 'src/utils/modelCost.js'
 import type { Tool } from 'src/Tool.js'
 import type { AssistantMessage } from 'src/types/message.js'
 import type { LLMProfileConfig } from './config.js'
@@ -52,6 +55,11 @@ type OpenAIResponse = {
   usage?: {
     prompt_tokens?: number
     completion_tokens?: number
+    prompt_cache_hit_tokens?: number
+    prompt_cache_miss_tokens?: number
+    completion_tokens_details?: {
+      reasoning_tokens?: number
+    }
   }
 }
 
@@ -86,7 +94,17 @@ export class OpenAICompatibleClient implements LLMClient {
       ),
     })
 
-    yield this.toAssistantMessage(response)
+    const usage = this.toAnthropicUsage(response.usage)
+    const resolvedModel = response.model || request.options.model
+    if (usage) {
+      addToTotalSessionCost(
+        calculateUSDCost(resolvedModel, usage),
+        usage,
+        resolvedModel,
+      )
+    }
+
+    yield this.toAssistantMessage(response, usage)
   }
 
   async sideQuery(request: LLMSideQueryRequest): Promise<LLMSideQueryResponse> {
@@ -383,7 +401,10 @@ export class OpenAICompatibleClient implements LLMClient {
     return `API error (${status}): ${bodyText || 'Unknown error'}`
   }
 
-  private toAssistantMessage(response: OpenAIResponse): AssistantMessage {
+  private toAssistantMessage(
+    response: OpenAIResponse,
+    usage = this.toAnthropicUsage(response.usage),
+  ): AssistantMessage {
     const choice = response.choices?.[0]
     const message = choice?.message
     const contentBlocks = [
@@ -400,7 +421,7 @@ export class OpenAICompatibleClient implements LLMClient {
 
     return createAssistantMessage({
       content: (contentBlocks.length > 0 ? contentBlocks : '') as string,
-      usage: this.toAnthropicUsage(response.usage) as never,
+      usage: usage as never,
     })
   }
 
@@ -431,21 +452,32 @@ export class OpenAICompatibleClient implements LLMClient {
   private toSideQueryUsage(
     usage: OpenAIResponse['usage'],
   ): LLMSideQueryUsage {
+    const promptCacheHitTokens = usage?.prompt_cache_hit_tokens ?? 0
+    const promptCacheMissTokens =
+      usage?.prompt_cache_miss_tokens ??
+      Math.max((usage?.prompt_tokens ?? 0) - promptCacheHitTokens, 0)
+
     return {
-      input_tokens: usage?.prompt_tokens ?? 0,
+      input_tokens: promptCacheMissTokens,
       output_tokens: usage?.completion_tokens ?? 0,
+      cache_read_input_tokens: promptCacheHitTokens,
     }
   }
 
   private toAnthropicUsage(
     usage: OpenAIResponse['usage'],
-  ): { input_tokens: number; output_tokens: number } | undefined {
+  ): Usage | undefined {
     if (!usage) {
       return undefined
     }
+    const promptCacheHitTokens = usage.prompt_cache_hit_tokens ?? 0
+    const promptCacheMissTokens =
+      usage.prompt_cache_miss_tokens ??
+      Math.max((usage.prompt_tokens ?? 0) - promptCacheHitTokens, 0)
     return {
-      input_tokens: usage.prompt_tokens ?? 0,
+      input_tokens: promptCacheMissTokens,
       output_tokens: usage.completion_tokens ?? 0,
+      cache_read_input_tokens: promptCacheHitTokens,
     }
   }
 

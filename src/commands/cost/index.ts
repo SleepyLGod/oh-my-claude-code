@@ -3,6 +3,7 @@
  * Implementation is lazy-loaded from cost.ts to reduce startup time.
  */
 import type { Command } from '../../commands.js'
+import { getResolvedLLMProfile } from '../../services/llm/config.js'
 import { isClaudeAISubscriber } from '../../utils/auth.js'
 
 const cost = {
@@ -14,7 +15,9 @@ const cost = {
     if (process.env.USER_TYPE === 'ant') {
       return false
     }
-    return isClaudeAISubscriber()
+    return (
+      getResolvedLLMProfile().type === 'anthropic' && isClaudeAISubscriber()
+    )
   },
   supportsNonInteractive: true,
   load: () => import('./cost.js'),

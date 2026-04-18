@@ -1,10 +1,13 @@
 import { formatTotalCost } from '../../cost-tracker.js'
 import { currentLimits } from '../../services/claudeAiLimits.js'
+import { getResolvedLLMProfile } from '../../services/llm/config.js'
 import type { LocalCommandCall } from '../../types/command.js'
 import { isClaudeAISubscriber } from '../../utils/auth.js'
 
 export const call: LocalCommandCall = async () => {
-  if (isClaudeAISubscriber()) {
+  const activeProfile = getResolvedLLMProfile()
+
+  if (activeProfile.type === 'anthropic' && isClaudeAISubscriber()) {
     let value: string
 
     if (currentLimits.isUsingOverage) {
