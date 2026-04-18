@@ -1,6 +1,6 @@
-# Modified Claude Code Source
+# Von Claude Code
 
-![Preview](preview.png)
+![Preview](res/preview.png)
 
 This repository is a modified Claude Code source tree.
 
@@ -26,8 +26,42 @@ recovery effort.
 - The tree was made runnable again after reconstruction from source maps.
 - The project now includes additional OpenAI-compatible provider workflows,
   including DeepSeek and Qwen support.
+- The CLI is branded as `Von Claude Code` in user-facing surfaces.
+- The fork exposes additional local commands such as `/buddy`, `/files`,
+  `/tag`, and `/version`.
+- The prompt color flow supports local session color changes, including a
+  `rainbow` option.
+- The repository includes a user-command template pack under
+  `docs/command-templates/` for personal custom commands.
 - Some private, native, or otherwise unrecoverable integrations still use
   reduced behavior compared with the original implementation.
+
+## Fork-specific additions
+
+- `/buddy`: local deterministic companion controls (`status`, `hatch`, `pet`,
+  `mute`, `unmute`)
+- `/model`: provider-aware model switching for supported profiles
+- `/files`, `/tag`, `/version`: visible in the external fork
+- `docs/command-templates/`: reference templates for a user-level custom
+  command pack
+
+See [docs/slash-commands-reference.md](docs/slash-commands-reference.md) for
+the current command surface and compatibility notes.
+
+## Personal customization
+
+This fork uses the same user-level customization locations as Claude Code:
+
+- `~/.claude/CLAUDE.md`: personal instructions / memory
+- `~/.claude/commands/`: active user custom commands
+
+The repository ships non-active reference templates in
+`docs/command-templates/`. To sync the current template pack into your active
+user commands, run:
+
+```bash
+./docs/command-templates/sync-active-commands.sh
+```
 
 ## Why this exists
 
@@ -64,4 +98,10 @@ Print the version:
 
 ```bash
 bun run version
+```
+
+Open the slash-command reference:
+
+```bash
+sed -n '1,260p' docs/slash-commands-reference.md
 ```
