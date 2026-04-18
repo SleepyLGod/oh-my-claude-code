@@ -131,6 +131,33 @@ export function ThemePicker(t0) {
     }, {
       label: "Light mode (ANSI colors only)",
       value: "light-ansi"
+    }, {
+      label: "Catppuccin Mocha",
+      value: "catppuccin-mocha"
+    }, {
+      label: "Catppuccin Latte",
+      value: "catppuccin-latte"
+    }, {
+      label: "Catppuccin Macchiato",
+      value: "catppuccin-macchiato"
+    }, {
+      label: "Catppuccin Frappe",
+      value: "catppuccin-frappe"
+    }, {
+      label: "Tokyo Night",
+      value: "tokyo-night"
+    }, {
+      label: "High contrast dark",
+      value: "high-contrast-dark"
+    }, {
+      label: "High contrast light",
+      value: "high-contrast-light"
+    }, {
+      label: "Rosé Pine",
+      value: "rose-pine"
+    }, {
+      label: "Rosé Pine Dawn",
+      value: "rose-pine-dawn"
     }];
     $[7] = t10;
   } else {
@@ -267,16 +294,18 @@ export function ThemePicker(t0) {
   } else {
     t24 = $[41];
   }
-  let t25;
-  if ($[42] !== t19 || $[43] !== t24) {
-    t25 = <Box flexDirection="column" gap={1}>{t19}{t24}</Box>;
-    $[42] = t19;
-    $[43] = t24;
-    $[44] = t25;
-  } else {
-    t25 = $[44];
-  }
-  const content = t25;
+  const palettePreview = <Box flexDirection="column" borderTop={true} borderBottom={true} borderLeft={false} borderRight={false} borderStyle="dashed" borderColor="promptBorder">
+      <Box flexDirection="row" gap={1} flexWrap="wrap">
+        <Text color="claude">claude</Text>
+        <Text color="suggestion">suggestion</Text>
+        <Text color="success">success</Text>
+        <Text color="warning">warning</Text>
+        <Text color="error">error</Text>
+        <Text color="permission">permission</Text>
+        <Text color="inactive">inactive</Text>
+      </Box>
+    </Box>;
+  const content = <Box flexDirection="column" gap={1}>{t19}{palettePreview}{t24}</Box>;
   if (!showIntroText) {
     let t26;
     if ($[45] !== content) {

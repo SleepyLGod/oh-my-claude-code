@@ -181,6 +181,23 @@ type Theme = {
 
 function defaultSyntaxThemeName(themeName: string): string {
   if (themeName.includes('ansi')) return 'ansi'
+  if (
+    themeName === 'catppuccin-mocha' ||
+    themeName === 'catppuccin-macchiato' ||
+    themeName === 'catppuccin-frappe' ||
+    themeName === 'tokyo-night' ||
+    themeName === 'high-contrast-dark' ||
+    themeName === 'rose-pine'
+  ) {
+    return 'Monokai Extended'
+  }
+  if (
+    themeName === 'catppuccin-latte' ||
+    themeName === 'high-contrast-light' ||
+    themeName === 'rose-pine-dawn'
+  ) {
+    return 'GitHub'
+  }
   if (themeName.includes('dark')) return 'Monokai Extended'
   return 'GitHub'
 }

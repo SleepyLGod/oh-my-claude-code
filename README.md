@@ -1,4 +1,4 @@
-# Von Claude Code
+# Oh-My-Claude-Code
 
 ![Preview](res/preview.png)
 
