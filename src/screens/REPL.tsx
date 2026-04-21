@@ -77,6 +77,7 @@ import { useCostSummary } from '../costHook.js';
 import { useFpsMetrics } from '../context/fpsMetrics.js';
 import { useAfterFirstRender } from '../hooks/useAfterFirstRender.js';
 import { useDeferredHookMessages } from '../hooks/useDeferredHookMessages.js';
+import { readRemoteOpenClawLock, readRemoteOpenClawState } from '../commands/remote-openclaw/state.js';
 import { addToHistory, removeLastFromHistory, expandPastedTextRefs, parseReferences } from '../history.js';
 import { prependModeCharacterToInput } from '../components/PromptInput/inputModes.js';
 import { prependToShellHistoryCache } from '../utils/suggestions/shellHistoryCompletion.js';
@@ -118,6 +119,52 @@ const getCoordinatorUserContext: (mcpClients: ReadonlyArray<{
   [k: string]: string;
 } = feature('COORDINATOR_MODE') ? require('../coordinator/coordinatorMode.js').getCoordinatorUserContext : () => ({});
 /* eslint-enable custom-rules/no-process-env-top-level, @typescript-eslint/no-require-imports */
+
+function isRemoteOpenClawManagementInput(input: string): boolean {
+  const trimmed = input.trim();
+  return trimmed === '/remote-openclaw' || trimmed.startsWith('/remote-openclaw ');
+}
+
+function getSlashCommandName(input: string): string | null {
+  const trimmed = input.trim()
+  if (!trimmed.startsWith('/')) {
+    return null
+  }
+
+  const spaceIndex = trimmed.indexOf(' ')
+  if (spaceIndex === -1) {
+    return trimmed.slice(1)
+  }
+
+  return trimmed.slice(1, spaceIndex)
+}
+
+function isAllowedWhileRemoteOpenClawSessionIsAttached(input: string): boolean {
+  const trimmed = input.trim()
+  const commandName = getSlashCommandName(trimmed)
+  if (!commandName) {
+    return false
+  }
+
+  switch (commandName) {
+    case 'remote-openclaw':
+      return true
+    case 'status':
+    case 'new':
+    case 'branch':
+    case 'fork':
+    case 'resume':
+    case 'continue':
+    case 'exit':
+      return true
+    default:
+      return false
+  }
+}
+
+function getRemoteOpenClawSessionBlockedMessage(): string {
+  return 'This Claude Code session is currently attached to the active Telegram remote control. Allowed here: /remote-openclaw, /status, /new, /branch or /fork, /resume, or /exit. Use one of those to inspect, stop, or switch away from this session.'
+}
 import useCanUseTool from '../hooks/useCanUseTool.js';
 import type { ToolPermissionContext, Tool } from '../Tool.js';
 import { applyPermissionUpdate, applyPermissionUpdates, persistPermissionUpdate } from '../utils/permissions/PermissionUpdate.js';
@@ -3179,6 +3226,21 @@ export function REPL({
   }, options?: {
     fromKeybinding?: boolean;
   }) => {
+    const repoRoot = getOriginalCwd();
+    const currentSessionId = getSessionId();
+    const remoteOpenClawState = await readRemoteOpenClawState(repoRoot);
+    const isRemoteOpenClawAttachedSession = remoteOpenClawState?.sessionId === currentSessionId && Boolean(remoteOpenClawState.attached);
+    const isAllowedRemoteOpenClawInput = isAllowedWhileRemoteOpenClawSessionIsAttached(input);
+    const isRemoteOpenClawCommand = isRemoteOpenClawManagementInput(input);
+    const activeRemoteOpenClawLock = isRemoteOpenClawAttachedSession ? await readRemoteOpenClawLock(repoRoot) : null;
+    if (isRemoteOpenClawAttachedSession && !activeRemote.isRemoteMode && !isAllowedRemoteOpenClawInput) {
+      setMessages(prev => [...prev, createSystemMessage(getRemoteOpenClawSessionBlockedMessage(), 'warning')]);
+      return;
+    }
+    if (activeRemoteOpenClawLock?.owner === 'remote' && activeRemoteOpenClawLock.sessionId === currentSessionId && !activeRemote.isRemoteMode && !isRemoteOpenClawCommand && !isAllowedRemoteOpenClawInput) {
+      setMessages(prev => [...prev, createSystemMessage('Remote OpenClaw is currently attached to this session. Use /remote-openclaw status or /remote-openclaw unregister, or switch to another session.', 'warning')]);
+      return;
+    }
     // Re-pin scroll to bottom on submit so the user always sees the new
     // exchange (matches OpenCode's auto-scroll behavior).
     repinScroll();
