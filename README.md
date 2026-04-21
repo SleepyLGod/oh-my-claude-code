@@ -42,11 +42,25 @@ recovery effort.
   `mute`, `unmute`)
 - `/model`: provider-aware model switching for supported profiles
 - `/files`, `/tag`, `/version`: visible in the external fork
+- `/remote-openclaw`: register the current session for dedicated Telegram
+  remote control via OpenClaw
 - `docs/command-templates/`: reference templates for a user-level custom
   command pack
 
 See [docs/slash-commands-reference.md](docs/slash-commands-reference.md) for
 the current command surface and compatibility notes.
+
+## OpenClaw integration
+
+This fork also includes a dedicated OpenClaw integration path:
+
+- a Telegram remote-control flow that can attach to a locally registered
+  Claude Code session
+- a separate `claude-code` task-agent path for a main OpenClaw bot
+
+See [docs/openclaw-claudecode.md](docs/openclaw-claudecode.md) for the current
+remote-control model, attach semantics, and isolation from the main OpenClaw
+task agent.
 
 ## Personal customization
 
