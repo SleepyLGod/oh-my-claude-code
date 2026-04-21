@@ -174,6 +174,7 @@ import model from './commands/model/index.js'
 import tag from './commands/tag/index.js'
 import outputStyle from './commands/output-style/index.js'
 import remoteEnv from './commands/remote-env/index.js'
+import remoteOpenClaw from './commands/remote-openclaw/index.js'
 import upgrade from './commands/upgrade/index.js'
 import {
   extraUsage,
@@ -287,6 +288,7 @@ const COMMANDS = memoize((): Command[] => [
   model,
   outputStyle,
   remoteEnv,
+  remoteOpenClaw,
   plugin,
   pr_comments,
   releaseNotes,
