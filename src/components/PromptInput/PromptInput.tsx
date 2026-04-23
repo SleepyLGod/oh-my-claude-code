@@ -2283,7 +2283,16 @@ function PromptInput({
           <Text dimColor>Waiting for permission…</Text>
         </Box>}
       <PromptInputStashNotice hasStash={stashedPrompt !== undefined} />
-      {swarmBanner ? <>
+      {swarmBanner ? swarmBanner.rainbow ? <>
+          <Box flexDirection="row">{renderRainbowBannerRule(promptLineWidth, swarmBanner.text, 0)}</Box>
+          <Box flexDirection="row" width={promptLineWidth}>
+            <PromptInputModeIndicator mode={mode} isLoading={isLoading} viewingAgentName={viewingAgentName} viewingAgentColor={viewingAgentColor} />
+            <Box flexGrow={1} flexShrink={1} onClick={handleInputClick}>
+              {textInputElement}
+            </Box>
+          </Box>
+          <Box flexDirection="row">{renderRainbowBannerRule(promptLineWidth, undefined, 3)}</Box>
+        </> : <>
           <Text color={swarmBanner.bgColor}>
             {swarmBanner.text ? <>
                 {'─'.repeat(Math.max(0, promptLineWidth - stringWidth(swarmBanner.text) - 4))}
@@ -2388,6 +2397,23 @@ function renderRainbowRule(width: number, phase: number = 0, suffix?: string): R
       length: ruleWidth
     }, (_, i) => <Text key={`rainbow-rule-${phase}-${i}`} color={getRainbowBorderColor(i + phase)}>─</Text>)}
       {suffixText ? <Text>{suffixText}</Text> : null}
+    </>;
+}
+function renderRainbowBannerRule(width: number, label?: string, phase: number = 0): React.ReactNode {
+  if (!label) {
+    return renderRainbowRule(width, phase);
+  }
+  const labelText = ` ${stripAnsi(label)} `;
+  const labelWidth = stringWidth(labelText);
+  const leadingWidth = Math.max(0, width - labelWidth - 2);
+  return <>
+      {Array.from({
+      length: leadingWidth
+    }, (_, i) => <Text key={`rainbow-banner-leading-${phase}-${i}`} color={getRainbowBorderColor(i + phase)}>─</Text>)}
+      {Array.from(labelText, (char, i) => <Text key={`rainbow-banner-label-${phase}-${i}`} color={getRainbowBorderColor(leadingWidth + i + phase)}>{char}</Text>)}
+      {Array.from({
+      length: 2
+    }, (_, i) => <Text key={`rainbow-banner-trailing-${phase}-${i}`} color={getRainbowBorderColor(leadingWidth + labelText.length + i + phase)}>─</Text>)}
     </>;
 }
 function getRainbowBorderColor(step: number): keyof Theme {

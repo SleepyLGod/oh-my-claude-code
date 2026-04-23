@@ -29,6 +29,7 @@ import type { Theme } from '../../utils/theme.js'
 type SwarmBannerInfo = {
   text: string
   bgColor: keyof Theme
+  rainbow?: boolean
 } | null
 
 /**
@@ -67,6 +68,7 @@ export function useSwarmBanner(): SwarmBannerInfo {
         bgColor: toThemeColor(
           teamContext?.selfAgentColor ?? getTeammateColor(),
         ),
+        rainbow: isRainbowColor(teamContext?.selfAgentColor ?? getTeammateColor()),
       }
     }
   }
@@ -87,6 +89,7 @@ export function useSwarmBanner(): SwarmBannerInfo {
       return {
         text: `View teammates: \`tmux -L ${getSwarmSocketName()} a\``,
         bgColor: viewedColor,
+        rainbow: isRainbowColor(viewedTeammate?.identity.color),
       }
     }
     if (
@@ -96,6 +99,7 @@ export function useSwarmBanner(): SwarmBannerInfo {
       return {
         text: `@${viewedTeammate.identity.agentName}`,
         bgColor: viewedColor,
+        rainbow: isRainbowColor(viewedTeammate?.identity.color),
       }
     }
     // insideTmux === null: still loading — fall through.
@@ -118,6 +122,7 @@ export function useSwarmBanner(): SwarmBannerInfo {
     return {
       text: name ? `@${name}` : task.description,
       bgColor: getAgentColor(task.agentType) ?? 'cyan_FOR_SUBAGENTS_ONLY',
+      rainbow: isRainbowColor(getAgentColor(task.agentType)),
     }
   }
 
@@ -128,6 +133,7 @@ export function useSwarmBanner(): SwarmBannerInfo {
     return {
       text: standaloneName,
       bgColor: toThemeColor(standaloneColor),
+      rainbow: isRainbowColor(standaloneColor),
     }
   }
 
@@ -139,6 +145,7 @@ export function useSwarmBanner(): SwarmBannerInfo {
     return {
       text: agent,
       bgColor: toThemeColor(agentDef?.color, 'promptBorder'),
+      rainbow: isRainbowColor(agentDef?.color),
     }
   }
 
@@ -152,4 +159,8 @@ function toThemeColor(
   return colorName && AGENT_COLORS.includes(colorName as AgentColorName)
     ? AGENT_COLOR_TO_THEME_COLOR[colorName as AgentColorName]
     : fallback
+}
+
+function isRainbowColor(colorName: string | undefined): boolean {
+  return colorName === 'rainbow'
 }
