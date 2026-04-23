@@ -45,6 +45,7 @@ import { buildPluginCommandTelemetryFields } from '../telemetry/pluginTelemetry.
 import { getAssistantMessageContentLength } from '../tokens.js';
 import { createAgentId } from '../uuid.js';
 import { getWorkload } from '../workloadContext.js';
+import { escapeXml } from '../xml.js';
 import type { ProcessUserInputBaseResult, ProcessUserInputContext } from './processUserInput.js';
 type SlashCommandResult = ProcessUserInputBaseResult & {
   command: Command;
@@ -590,13 +591,13 @@ async function getMessagesForSlashCommand(commandName: string, args: string, set
               // output that must reach the transcript.
               const skipTranscript = isFullscreenEnvEnabled() && typeof result === 'string' && result.endsWith(' dismissed');
               void resolve({
-                messages: options?.display === 'system' ? skipTranscript ? metaMessages : [createCommandInputMessage(formatCommandInput(command, args)), createCommandInputMessage(`<local-command-stdout>${result}</local-command-stdout>`), ...metaMessages] : [createUserMessage({
+                messages: options?.display === 'system' ? skipTranscript ? metaMessages : [createCommandInputMessage(formatCommandInput(command, args)), createCommandInputMessage(`<local-command-stdout>${escapeXml(result ?? '')}</local-command-stdout>`), ...metaMessages] : [createUserMessage({
                   content: prepareUserContent({
                     inputString: formatCommandInput(command, args),
                     precedingInputBlocks
                   })
                 }), result ? createUserMessage({
-                  content: `<local-command-stdout>${result}</local-command-stdout>`
+                  content: `<local-command-stdout>${escapeXml(result)}</local-command-stdout>`
                 }) : createUserMessage({
                   content: `<local-command-stdout>${NO_CONTENT_MESSAGE}</local-command-stdout>`
                 }), ...metaMessages],
@@ -706,7 +707,7 @@ async function getMessagesForSlashCommand(commandName: string, args: string, set
 
             // Text result — use system message so it doesn't render as a user bubble
             return {
-              messages: [userMessage, createCommandInputMessage(`<local-command-stdout>${result.value}</local-command-stdout>`)],
+              messages: [userMessage, createCommandInputMessage(`<local-command-stdout>${escapeXml(result.value)}</local-command-stdout>`)],
               shouldQuery: false,
               command,
               resultText: result.value
@@ -714,7 +715,7 @@ async function getMessagesForSlashCommand(commandName: string, args: string, set
           } catch (e) {
             logError(e);
             return {
-              messages: [userMessage, createCommandInputMessage(`<local-command-stderr>${String(e)}</local-command-stderr>`)],
+              messages: [userMessage, createCommandInputMessage(`<local-command-stderr>${escapeXml(String(e))}</local-command-stderr>`)],
               shouldQuery: false,
               command
             };

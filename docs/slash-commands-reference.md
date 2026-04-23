@@ -48,6 +48,7 @@ The table below reflects the runtime-visible commands returned by `getCommands()
 | `/diff` | - | - | `local-jsx` | `visible` | View uncommitted changes and per-turn diffs. |
 | `/doctor` | - | - | `local-jsx` | `visible` | Diagnose installation and settings issues. |
 | `/effort` | - | `[low\|medium\|high\|max\|auto]` | `local-jsx` | `visible` | Set model effort level. |
+| `/env` | - | - | `local-jsx` | `visible` | Inspect the current runtime environment, capability state, and degraded integrations. |
 | `/exit` | `quit` | - | `local-jsx` | `visible` | Exit the REPL. |
 | `/fast` | - | `[on\|off]` | `local-jsx` | `visible` | Toggle fast mode when supported. |
 | `/files` | - | - | `local` | `visible` | List the files currently loaded into context. |
@@ -70,6 +71,7 @@ The table below reflects the runtime-visible commands returned by `getCommands()
 | `/status` | - | - | `local-jsx` | `visible` | Show overall Claude Code status, model, account, connectivity, and tool state. |
 | `/statusline` | - | - | `prompt` | `visible` | Set up the status line UI. |
 | `/stickers` | - | - | `local` | `visible` | Order Claude Code stickers. |
+| `/summary` | - | `[short\|long]` | `local` | `visible` | Summarize the current session’s task, current progress, and next step. |
 | `/theme` | - | - | `local-jsx` | `visible` | Change the theme. |
 | `/feedback` | `bug` | `[report]` | `local-jsx` | `visible` | Submit product feedback. |
 | `/review` | - | - | `prompt` | `visible` | Review a pull request or pending change set. |
@@ -175,8 +177,6 @@ intentional stubs. These should not be treated as usable features.
 | `/issue` | `stub` | Declared as `isEnabled: false`, `isHidden: true`. |
 | `/backfill-sessions` | `stub` | Declared as `isEnabled: false`, `isHidden: true`. |
 | `/teleport` | `stub` | Declared as `isEnabled: false`, `isHidden: true`. |
-| `/ctx_viz` | `stub` | Declared as `isEnabled: false`, `isHidden: true`. |
-| `/env` | `stub` | Declared as `isEnabled: false`, `isHidden: true`. |
 | `/break-cache` | `stub` | Declared as `isEnabled: false`, `isHidden: true`. |
 | `/perf-issue` | `stub` | Declared as `isEnabled: false`, `isHidden: true`. |
 | `/reset-limits` | `stub` | Exported as a disabled hidden stub for both interactive and non-interactive variants. |

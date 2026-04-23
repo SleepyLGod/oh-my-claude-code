@@ -2286,21 +2286,21 @@ function PromptInput({
       {swarmBanner ? <>
           <Text color={swarmBanner.bgColor}>
             {swarmBanner.text ? <>
-                {'─'.repeat(Math.max(0, columns - stringWidth(swarmBanner.text) - 4))}
+                {'─'.repeat(Math.max(0, promptLineWidth - stringWidth(swarmBanner.text) - 4))}
                 <Text backgroundColor={swarmBanner.bgColor} color="inverseText">
                   {' '}
                   {swarmBanner.text}{' '}
                 </Text>
                 {'──'}
-              </> : '─'.repeat(columns)}
+              </> : '─'.repeat(promptLineWidth)}
           </Text>
-          <Box flexDirection="row" width="100%">
+          <Box flexDirection="row" width={promptLineWidth}>
             <PromptInputModeIndicator mode={mode} isLoading={isLoading} viewingAgentName={viewingAgentName} viewingAgentColor={viewingAgentColor} />
             <Box flexGrow={1} flexShrink={1} onClick={handleInputClick}>
               {textInputElement}
             </Box>
           </Box>
-          <Text color={swarmBanner.bgColor}>{'─'.repeat(columns)}</Text>
+          <Text color={swarmBanner.bgColor}>{'─'.repeat(promptLineWidth)}</Text>
         </> : useRainbowBorder ? <>
           <Box flexDirection="row">{renderRainbowRule(promptLineWidth, 0, promptBorderText?.content)}</Box>
           <Box flexDirection="row" alignItems="flex-start" justifyContent="flex-start" width={promptLineWidth}>

@@ -118,6 +118,7 @@ import {
   getCompactUserSummaryMessage,
   getPartialCompactPrompt,
 } from './prompt.js'
+import { getResolvedLLMProfile } from '../llm/config.js'
 
 export const POST_COMPACT_MAX_FILES_TO_RESTORE = 5
 export const POST_COMPACT_TOKEN_BUDGET = 50_000
@@ -337,6 +338,26 @@ export function buildPostCompactMessages(result: CompactionResult): Message[] {
   ]
 }
 
+function assertValidCompactSummaryResponse(
+  summaryResponse: AssistantMessage,
+  summary: string | null,
+): string {
+  if (!summary) {
+    throw new Error(
+      'Failed to generate conversation summary - response did not contain valid text content',
+    )
+  }
+
+  if (
+    summaryResponse.isApiErrorMessage ||
+    startsWithApiErrorPrefix(summary)
+  ) {
+    throw new Error(summary)
+  }
+
+  return summary
+}
+
 /**
  * Annotate a compact boundary with relink metadata for messagesToKeep.
  * Preserved messages keep their original parentUuids on disk (dedup-skipped);
@@ -490,28 +511,29 @@ export async function compactConversation(
       }
     }
 
-    if (!summary) {
-      logForDebugging(
-        `Compact failed: no summary text in response. Response: ${jsonStringify(summaryResponse)}`,
-        { level: 'error' },
-      )
-      logEvent('tengu_compact_failed', {
-        reason:
-          'no_summary' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-        preCompactTokenCount,
-        promptCacheSharingEnabled,
-      })
-      throw new Error(
-        `Failed to generate conversation summary - response did not contain valid text content`,
-      )
-    } else if (startsWithApiErrorPrefix(summary)) {
-      logEvent('tengu_compact_failed', {
-        reason:
-          'api_error' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-        preCompactTokenCount,
-        promptCacheSharingEnabled,
-      })
-      throw new Error(summary)
+    try {
+      summary = assertValidCompactSummaryResponse(summaryResponse, summary)
+    } catch (error) {
+      if (!summary) {
+        logForDebugging(
+          `Compact failed: no summary text in response. Response: ${jsonStringify(summaryResponse)}`,
+          { level: 'error' },
+        )
+        logEvent('tengu_compact_failed', {
+          reason:
+            'no_summary' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+          preCompactTokenCount,
+          promptCacheSharingEnabled,
+        })
+      } else {
+        logEvent('tengu_compact_failed', {
+          reason:
+            'api_error' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+          preCompactTokenCount,
+          promptCacheSharingEnabled,
+        })
+      }
+      throw error
     }
 
     // Store the current file state before clearing
@@ -897,22 +919,17 @@ export async function partialCompactConversation(
         forkContextMessages: truncated,
       }
     }
-    if (!summary) {
+    try {
+      summary = assertValidCompactSummaryResponse(summaryResponse, summary)
+    } catch (error) {
       logEvent('tengu_partial_compact_failed', {
         reason:
-          'no_summary' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+          summary == null
+            ? ('no_summary' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS)
+            : ('api_error' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS),
         ...failureMetadata,
       })
-      throw new Error(
-        'Failed to generate conversation summary - response did not contain valid text content',
-      )
-    } else if (startsWithApiErrorPrefix(summary)) {
-      logEvent('tengu_partial_compact_failed', {
-        reason:
-          'api_error' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-        ...failureMetadata,
-      })
-      throw new Error(summary)
+      throw error
     }
 
     // Store the current file state before clearing
@@ -1156,6 +1173,7 @@ async function streamCompactSummary({
     'tengu_compact_cache_prefix',
     true,
   )
+  const activeLLMProfile = getResolvedLLMProfile()
   // Send keep-alive signals during compaction to prevent remote session
   // WebSocket idle timeouts from dropping bridge connections. Compaction
   // API calls can take 5-10+ seconds, during which no other messages
@@ -1245,6 +1263,38 @@ async function streamCompactSummary({
           preCompactTokenCount,
         })
       }
+    }
+
+    // Non-Anthropic profiles use the query() stack for main turns. Keep
+    // compaction on that same stack so 3P providers do not fall back to the
+    // Anthropic-only streaming client below.
+    if (activeLLMProfile.type !== 'anthropic') {
+      const result = await runForkedAgent({
+        promptMessages: [summaryRequest],
+        cacheSafeParams,
+        canUseTool: createCompactCanUseTool(),
+        querySource: 'compact',
+        forkLabel: 'compact',
+        maxTurns: 1,
+        skipCacheWrite: true,
+        maxOutputTokens: Math.min(
+          COMPACT_MAX_OUTPUT_TOKENS,
+          getMaxOutputTokensForModel(context.options.mainLoopModel),
+        ),
+        overrides: { abortController: context.abortController },
+      })
+      const assistantMsg = getLastAssistantMessage(result.messages)
+      const assistantText = assistantMsg
+        ? getAssistantMessageText(assistantMsg)
+        : null
+      if (assistantMsg && assistantText && !assistantMsg.isApiErrorMessage) {
+        return assistantMsg
+      }
+      logForDebugging(
+        `Compact 3P fallback failed to produce text summary. Response: ${jsonStringify(assistantMsg)}`,
+        { level: 'warn' },
+      )
+      throw new Error(ERROR_MESSAGE_INCOMPLETE_RESPONSE)
     }
 
     // Regular streaming path (fallback when cache sharing fails or is disabled)

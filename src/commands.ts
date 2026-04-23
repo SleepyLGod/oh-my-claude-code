@@ -17,7 +17,6 @@ import config from './commands/config/index.js'
 import { context, contextNonInteractive } from './commands/context/index.js'
 import cost from './commands/cost/index.js'
 import diff from './commands/diff/index.js'
-import ctx_viz from './commands/ctx_viz/index.js'
 import doctor from './commands/doctor/index.js'
 import memory from './commands/memory/index.js'
 import help from './commands/help/index.js'
@@ -167,7 +166,7 @@ import {
 import memoize from 'lodash-es/memoize.js'
 import { isUsing3PServices, isClaudeAISubscriber } from './utils/auth.js'
 import { isFirstPartyAnthropicBaseUrl } from './utils/model/providers.js'
-import env from './commands/env/index.js'
+import { env, envNonInteractive } from './commands/env/index.js'
 import exit from './commands/exit/index.js'
 import exportCommand from './commands/export/index.js'
 import model from './commands/model/index.js'
@@ -227,7 +226,6 @@ export const INTERNAL_ONLY_COMMANDS = [
   bughunter,
   commit,
   commitPushPr,
-  ctx_viz,
   goodClaude,
   issue,
   initVerifiers,
@@ -240,11 +238,9 @@ export const INTERNAL_ONLY_COMMANDS = [
   resetLimitsNonInteractive,
   onboarding,
   share,
-  summary,
   teleport,
   antTrace,
   perfIssue,
-  env,
   oauthRefresh,
   debugToolCall,
   agentsPlatform,
@@ -272,6 +268,8 @@ const COMMANDS = memoize((): Command[] => [
   diff,
   doctor,
   effort,
+  env,
+  envNonInteractive,
   exit,
   fast,
   files,
@@ -301,6 +299,7 @@ const COMMANDS = memoize((): Command[] => [
   status,
   statusline,
   stickers,
+  summary,
   tag,
   theme,
   feedback,

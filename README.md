@@ -41,6 +41,8 @@ recovery effort.
 - `/buddy`: local deterministic companion controls (`status`, `hatch`, `pet`,
   `mute`, `unmute`)
 - `/model`: provider-aware model switching for supported profiles
+- `/env`: runtime capability and degraded-integration inspection
+- `/summary`: current-session recovery summary with a deterministic fallback
 - `/files`, `/tag`, `/version`: visible in the external fork
 - `/remote-openclaw`: register the current session for dedicated Telegram
   remote control via OpenClaw
@@ -49,6 +51,9 @@ recovery effort.
 
 See [docs/slash-commands-reference.md](docs/slash-commands-reference.md) for
 the current command surface and compatibility notes.
+
+See [docs/fork-roadmap.md](docs/fork-roadmap.md) for the current short
+roadmap and the design constraints for new fork-specific commands.
 
 ## OpenClaw integration
 
