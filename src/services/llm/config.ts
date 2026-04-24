@@ -46,11 +46,16 @@ const BUILTIN_PROFILES: Record<string, LLMProfileConfig> = {
   },
   deepseek: {
     type: 'openai_compat',
-    baseURL: 'https://api.deepseek.com/v1',
+    baseURL: 'https://api.deepseek.com',
     apiKeyEnv: 'DEEPSEEK_API_KEY',
-    defaultModel: 'deepseek-chat',
+    defaultModel: 'deepseek-v4-pro',
     displayName: 'DeepSeek',
-    suggestedModels: ['deepseek-chat', 'deepseek-reasoner'],
+    suggestedModels: [
+      'deepseek-v4-flash',
+      'deepseek-v4-pro',
+      'deepseek-chat',
+      'deepseek-reasoner',
+    ],
     streaming: 'enabled',
   },
   qwen: {

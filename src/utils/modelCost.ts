@@ -103,6 +103,22 @@ export const COST_DEEPSEEK_REASONER = {
   webSearchRequests: 0,
 } as const satisfies ModelCosts
 
+export const COST_DEEPSEEK_V4_FLASH = {
+  inputTokens: 0.14,
+  outputTokens: 0.28,
+  promptCacheWriteTokens: 0.14,
+  promptCacheReadTokens: 0.028,
+  webSearchRequests: 0,
+} as const satisfies ModelCosts
+
+export const COST_DEEPSEEK_V4_PRO = {
+  inputTokens: 1.74,
+  outputTokens: 3.48,
+  promptCacheWriteTokens: 1.74,
+  promptCacheReadTokens: 0.145,
+  webSearchRequests: 0,
+} as const satisfies ModelCosts
+
 // Qwen pricing below uses the Chinese Mainland compatible-mode endpoint
 // currently configured for this fork's builtin qwen profile.
 export const COST_QWEN_PLUS = {
@@ -168,6 +184,8 @@ export const MODEL_COSTS: Record<ModelShortName, ModelCosts> = {
     COST_TIER_5_25,
   'deepseek-chat': COST_DEEPSEEK_CHAT,
   'deepseek-reasoner': COST_DEEPSEEK_REASONER,
+  'deepseek-v4-flash': COST_DEEPSEEK_V4_FLASH,
+  'deepseek-v4-pro': COST_DEEPSEEK_V4_PRO,
   'qwen-plus': COST_QWEN_PLUS,
   'qwen-turbo': COST_QWEN_TURBO,
   'qwen-max': COST_QWEN_MAX,

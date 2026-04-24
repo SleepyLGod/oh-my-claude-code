@@ -30,6 +30,7 @@ If you already know which provider you want, you can still launch directly:
 - `CLAUDE_CODE_LLM_PROFILE=deepseek bun run dev --bare`
 - `CLAUDE_CODE_LLM_PROFILE=qwen bun run dev --bare`
 - `CLAUDE_CODE_LLM_PROFILE=openai bun run dev --bare`
+- `CLAUDE_CONFIG_DIR=~/.von-claude CLAUDE_CODE_LLM_PROFILE=deepseek tools/von-claude --bare`
 
 ## Settings Shape
 
@@ -46,9 +47,9 @@ If you already know which provider you want, you can still launch directly:
       },
       "deepseek": {
         "type": "openai_compat",
-        "baseURL": "https://api.deepseek.com/v1",
+        "baseURL": "https://api.deepseek.com",
         "apiKeyEnv": "DEEPSEEK_API_KEY",
-        "defaultModel": "deepseek-chat"
+        "defaultModel": "deepseek-v4-pro"
       },
       "qwen": {
         "type": "openai_compat",
