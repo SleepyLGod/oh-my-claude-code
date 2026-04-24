@@ -701,7 +701,7 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
         clearClassifierChecking(toolUseID)
       }
 
-      // Notify ants when classifier error dumped prompts (will be in /share)
+      // Notify ants when classifier error dumped prompts.
       if (
         process.env.USER_TYPE === 'ant' &&
         classifierResult.errorDumpPath &&
@@ -709,7 +709,7 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
       ) {
         context.addNotification({
           key: 'auto-mode-error-dump',
-          text: `Auto mode classifier error — prompts dumped to ${classifierResult.errorDumpPath} (included in /share)`,
+          text: `Auto mode classifier error — prompts dumped to ${classifierResult.errorDumpPath}`,
           priority: 'immediate',
           color: 'error',
         })

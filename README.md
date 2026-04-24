@@ -69,10 +69,12 @@ task agent.
 
 ## Personal customization
 
-This fork uses the same user-level customization locations as Claude Code:
+This fork is intended to run as `von-claude` with its own config home:
 
-- `~/.claude/CLAUDE.md`: personal instructions / memory
-- `~/.claude/commands/`: active user custom commands
+- `~/.von-claude/CLAUDE.md`: personal instructions / memory
+- `~/.von-claude/commands/`: active user custom commands
+
+Official Claude Code can keep using `claude` and `~/.claude` independently.
 
 The repository ships non-active reference templates in
 `docs/command-templates/`. To sync the current template pack into your active

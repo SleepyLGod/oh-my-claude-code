@@ -4,7 +4,7 @@ This directory contains project-side reference templates for a user-first comman
 
 Important distinction:
 
-- Active personal commands live in `~/.claude/commands/`
+- Active personal commands for this fork live in `~/.von-claude/commands/`
 - Files in this directory are documentation templates only
 
 The command pack is intentionally split into:
@@ -22,13 +22,13 @@ Why not place the same files in `.claude/commands/`?
 
 Recommended usage:
 
-1. Keep your primary versions in `~/.claude/commands/`
+1. Keep your primary versions in `~/.von-claude/commands/`
 2. Use the files here as reference or seed templates
 3. If you want project-specific active versions, copy a template into `.claude/commands/` and rename it or adapt the semantics so it does not collide with your user-level command of the same name
 
 Sync helper:
 
-- `sync-active-commands.sh` copies the repo templates into `~/.claude/commands/` for the current user
+- `sync-active-commands.sh` copies the repo templates into `~/.von-claude/commands/` for the current user by default
 - Review the template diffs first, then run the script explicitly when you want the user-level active commands updated
 - The script only updates files that already exist in this template pack
 

@@ -10,6 +10,7 @@ This path is controlled by `/remote-openclaw`.
 - Dedicated OpenClaw gateway project: `~/Projects/openclaw-claudecode`
 - Dedicated `/claude` command surface
 - Dedicated registered Claude Code target session
+- Fork config home: `~/.von-claude`
 
 Flow:
 
@@ -52,6 +53,7 @@ Important:
 - This does not read `/remote-openclaw` state
 - This should run in its own Claude Code session lifecycle
 - It should not affect your current local Claude Code conversation
+- Official Claude Code should be added as a separate OpenClaw agent, not as a replacement for this fork agent
 
 ## Minimal Telegram remote-control smoke test
 

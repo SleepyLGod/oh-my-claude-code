@@ -176,7 +176,7 @@ intentional stubs. These should not be treated as usable features.
 | `/autofix-pr` | `stub` | Declared as `isEnabled: false`, `isHidden: true`. |
 | `/issue` | `stub` | Declared as `isEnabled: false`, `isHidden: true`. |
 | `/backfill-sessions` | `stub` | Declared as `isEnabled: false`, `isHidden: true`. |
-| `/teleport` | `stub` | Declared as `isEnabled: false`, `isHidden: true`. |
+| `/teleport` | `stub` | Official Claude Code uses this to pull a Claude Code on the web session into the local terminal. This fork keeps the command disabled. |
 | `/break-cache` | `stub` | Declared as `isEnabled: false`, `isHidden: true`. |
 | `/perf-issue` | `stub` | Declared as `isEnabled: false`, `isHidden: true`. |
 | `/reset-limits` | `stub` | Exported as a disabled hidden stub for both interactive and non-interactive variants. |
@@ -200,20 +200,20 @@ the table above. Those should not be treated as usable commands.
 - Command availability is dynamic. `getCommands()` filters on auth state, provider requirements, feature flags, and `isEnabled()` callbacks.
 - Some descriptions are runtime-dependent. `/model`, `/sandbox`, and fast-mode related commands can vary their text based on the current environment.
 - This repository is a restored source tree. A command being listed here means a command object exists and is wired into the CLI, not that every downstream dependency is fully restored.
-- This repository also ships non-active reference templates for a user command pack under `docs/command-templates/`. The active copies are intended to live in `~/.claude/commands/`, not `.claude/commands/`, to avoid name collisions between user and project custom commands.
+- This repository also ships non-active reference templates for a user command pack under `docs/command-templates/`. The active copies for this fork are intended to live in `~/.von-claude/commands/`, not `.claude/commands/`, to avoid name collisions between user and project custom commands.
 
 ## User Command Pack
 
 This fork also uses a user-level custom command pack outside the repository:
 
-- Active user commands: `~/.claude/commands/`
+- Active fork user commands: `~/.von-claude/commands/`
 - Project reference templates: `docs/command-templates/`
 
 The repository copies are documentation templates only. They are not meant to
 be activated alongside same-name user commands, because user-level and
 project-level custom commands can shadow each other.
 
-To sync the current template pack into `~/.claude/commands/`, run:
+To sync the current template pack into `~/.von-claude/commands/`, run:
 
 ```bash
 ./docs/command-templates/sync-active-commands.sh
@@ -263,4 +263,4 @@ verification.
 
 If you want to reuse one of the templates as a project-specific active command,
 copy it into `.claude/commands/` and rename it or adapt its semantics so it
-does not collide with an active command of the same name in `~/.claude/commands/`.
+does not collide with an active command of the same name in `~/.von-claude/commands/`.

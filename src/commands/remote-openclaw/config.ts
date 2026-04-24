@@ -1,5 +1,6 @@
 import { homedir } from 'os'
 import { join } from 'path'
+import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 
 export const OPENCLAW_REMOTE_AGENT_ID = 'claude-code-remote'
 export const OPENCLAW_TASK_AGENT_ID = 'claude-code'
@@ -29,7 +30,7 @@ export function getRemoteOpenClawLockPath(repoRoot: string): string {
 }
 
 export function getRemoteOpenClawRegistryPath(): string {
-  return join(homedir(), '.claude', 'openclaw', 'remote-targets.json')
+  return join(getClaudeConfigHomeDir(), 'openclaw', 'remote-targets.json')
 }
 
 export function buildAcpxAgentCommand(repoRoot: string): string {

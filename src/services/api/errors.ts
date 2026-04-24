@@ -685,7 +685,7 @@ export function getAssistantMessageFromError(
     }
 
     if (process.env.USER_TYPE === 'ant') {
-      const baseMessage = `API Error: 400 ${error.message}\n\nRun /share and post the JSON file to ${MACRO.FEEDBACK_CHANNEL}.`
+      const baseMessage = `API Error: 400 ${error.message}\n\nRun /feedback and include the relevant error details.`
       const rewindInstruction = getIsNonInteractiveSession()
         ? ''
         : ' Then, use /rewind to recover the conversation.'

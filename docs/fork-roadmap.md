@@ -6,7 +6,7 @@ feature imitation.
 ## Current priorities
 
 1. Command surface that matches the fork's real needs
-   - `/issue` and `/share`: local-first issue/export workflows
+   - `/issue`: local-first issue workflows
    - continue tightening `/context` as the official-aligned context inspector
    - keep `/env` focused on runtime capability and degraded-integration reporting
    - keep `/summary` focused on current-session recovery, not repo-wide status

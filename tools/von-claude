@@ -1,8 +1,7 @@
 #!/bin/sh
 set -eu
 
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
-REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
+REPO_ROOT="${VON_CLAUDE_REPO_ROOT:-/Users/von/Projects/claude-code}"
 
 export CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.von-claude}"
 

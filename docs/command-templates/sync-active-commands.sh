@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_dir="/Users/von/Projects/claude-code/docs/command-templates"
-target_dir="$HOME/.claude/commands"
+target_dir="${CLAUDE_CONFIG_DIR:-$HOME/.von-claude}/commands"
 
 mkdir -p "$target_dir"
 
