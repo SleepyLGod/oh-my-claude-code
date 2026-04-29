@@ -22,7 +22,7 @@ import { checkAndDisableAutoModeIfNeeded, checkAndDisableBypassPermissionsIfNeed
 import { resetUserCache } from '../../utils/user.js';
 import { getSettings_DEPRECATED } from '../../utils/settings/settings.js';
 export async function call(onDone: LocalJSXCommandOnDone, context: LocalJSXCommandContext): Promise<React.ReactNode> {
-  return <Login onDone={async success => {
+  return <Login onDone={async (success, mainLoopModel, completionMessage) => {
     context.onChangeAPIKey();
     // Signature-bearing blocks (thinking, connector_text) are bound to the API key —
     // strip them so the new key doesn't reject stale signatures.
@@ -67,7 +67,7 @@ export async function call(onDone: LocalJSXCommandOnDone, context: LocalJSXComma
         authVersion: prev.authVersion + 1
       }));
     }
-    onDone(success ? 'Login successful' : 'Login interrupted');
+    onDone(success ? completionMessage ?? 'Login successful' : 'Login interrupted');
   }} />;
 }
 export function Login(props) {
@@ -84,7 +84,7 @@ export function Login(props) {
   }
   let t1;
   if ($[3] !== mainLoopModel || $[4] !== props) {
-    t1 = () => props.onDone(true, mainLoopModel);
+    t1 = completionMessage => props.onDone(true, mainLoopModel, completionMessage);
     $[3] = mainLoopModel;
     $[4] = props;
     $[5] = t1;

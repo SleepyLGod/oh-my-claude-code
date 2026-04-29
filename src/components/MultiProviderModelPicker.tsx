@@ -3,7 +3,10 @@ import { Box, Text } from '../ink.js'
 import type { EffortLevel } from '../utils/effort.js'
 import {
   getActiveLLMProfileName,
+  getConfiguredLLMProfileApiKeyEnv,
   getLLMProfileDisplayName,
+  getLLMProfileApiKeyEnvNames,
+  getLLMProfileProtocolLabel,
   getLLMProfileNames,
   getResolvedLLMProfileByName,
   getSuggestedModelsForProfile,
@@ -45,18 +48,28 @@ export function MultiProviderModelPicker({
     return getLLMProfileNames().map(profileName => {
       const profile = getResolvedLLMProfileByName(profileName)
       const isCurrent = profileName === currentProfileName
-      const apiKeyStatus = profile.apiKeyEnv
-        ? process.env[profile.apiKeyEnv]
-          ? `${profile.apiKeyEnv} configured`
-          : `Missing ${profile.apiKeyEnv}`
-        : profile.type === 'anthropic'
-          ? 'Claude-native'
-          : profile.type
+      const apiKeyEnvNames = getLLMProfileApiKeyEnvNames(profile)
+      const configuredApiKeyEnv = getConfiguredLLMProfileApiKeyEnv(profile)
+      const protocol = getLLMProfileProtocolLabel(profile)
+      const apiKeyStatus =
+        profile.requiresApiKey === false
+          ? 'No API key required'
+          : apiKeyEnvNames.length > 0
+            ? configuredApiKeyEnv
+              ? `${configuredApiKeyEnv} configured`
+              : `Missing ${apiKeyEnvNames.join(' or ')}`
+            : protocol
 
       return {
         value: profileName,
         label: getLLMProfileDisplayName(profileName),
-        description: isCurrent ? `Current · ${apiKeyStatus}` : apiKeyStatus,
+        description: [
+          isCurrent ? 'Current' : null,
+          protocol,
+          apiKeyStatus !== protocol ? apiKeyStatus : null,
+        ]
+          .filter(Boolean)
+          .join(' · '),
       }
     })
   }, [currentProfileName])

@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { getIsNonInteractiveSession } from '../bootstrap/state.js'
 import { verifyApiKey } from '../services/api/claude.js'
-import { getResolvedLLMProfileByName } from '../services/llm/config.js'
+import {
+  getActiveLLMProfileName,
+  getConfiguredLLMProfileApiKeyEnv,
+  getLLMProfileApiKeyEnvNames,
+  getResolvedLLMProfileByName,
+  isThirdPartyLLMProfile,
+} from '../services/llm/config.js'
 import { useSettings } from './useSettings.js'
 import {
   getAnthropicApiKeyWithSource,
@@ -26,15 +32,17 @@ export type ApiKeyVerificationResult = {
 function getVerificationStatusForProfile(
   settings: ReturnType<typeof useSettings>,
 ): VerificationStatus {
-  const profileName = settings.llm?.providerProfile || 'anthropic'
+  const profileName = getActiveLLMProfileName(settings)
   const profile = getResolvedLLMProfileByName(profileName, settings)
 
   if (profile.type === 'mock') {
     return 'valid'
   }
 
-  if (profile.type === 'openai_compat') {
-    return profile.apiKeyEnv && process.env[profile.apiKeyEnv] ? 'valid' : 'missing'
+  if (isThirdPartyLLMProfile(profile)) {
+    if (profile.requiresApiKey === false) return 'valid'
+    if (getLLMProfileApiKeyEnvNames(profile).length === 0) return 'missing'
+    return getConfiguredLLMProfileApiKeyEnv(profile) ? 'valid' : 'missing'
   }
 
   if (!isAnthropicAuthEnabled() || isClaudeAISubscriber()) {
@@ -58,7 +66,7 @@ function getVerificationStatusForProfile(
 
 export function useApiKeyVerification(): ApiKeyVerificationResult {
   const settings = useSettings()
-  const activeProfileName = settings.llm?.providerProfile || 'anthropic'
+  const activeProfileName = getActiveLLMProfileName(settings)
   const activeProfile = useMemo(
     () => getResolvedLLMProfileByName(activeProfileName, settings),
     [activeProfileName, settings],
@@ -80,13 +88,9 @@ export function useApiKeyVerification(): ApiKeyVerificationResult {
       return
     }
 
-    if (activeProfile.type === 'openai_compat') {
+    if (isThirdPartyLLMProfile(activeProfile)) {
       setError(null)
-      setStatus(
-        activeProfile.apiKeyEnv && process.env[activeProfile.apiKeyEnv]
-          ? 'valid'
-          : 'missing',
-      )
+      setStatus(getVerificationStatusForProfile(settings))
       return
     }
 
@@ -125,7 +129,7 @@ export function useApiKeyVerification(): ApiKeyVerificationResult {
       setStatus(newStatus)
       return
     }
-  }, [activeProfile])
+  }, [activeProfile, settings])
 
   return {
     status,

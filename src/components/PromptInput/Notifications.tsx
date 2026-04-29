@@ -15,7 +15,11 @@ import { useVoiceEnabled } from '../../hooks/useVoiceEnabled.js';
 import { Box, Text } from '../../ink.js';
 import { useClaudeAiLimits } from '../../services/claudeAiLimitsHook.js';
 import { calculateTokenWarningState } from '../../services/compact/autoCompact.js';
-import { getResolvedLLMProfileByName } from '../../services/llm/config.js';
+import {
+  getActiveLLMProfileName,
+  getLLMProfileApiKeyEnvNames,
+  getResolvedLLMProfileByName,
+} from '../../services/llm/config.js';
 import type { MCPServerConnection } from '../../services/mcp/types.js';
 import type { Message } from '../../types/message.js';
 import { getApiKeyHelperElapsedMs, getConfiguredApiKeyHelper, getSubscriptionType } from '../../utils/auth.js';
@@ -130,7 +134,7 @@ export function Notifications(t0) {
   const shouldShowAutoUpdater = !shouldShowIdeSelection || isAutoUpdating || autoUpdaterResult?.status !== "success";
   const isInOverageMode = claudeAiLimits.isUsingOverage;
   const settings = useSettings();
-  const activeProfileName = settings.llm?.providerProfile || 'anthropic';
+  const activeProfileName = getActiveLLMProfileName(settings);
   const activeProfile = getResolvedLLMProfileByName(activeProfileName, settings);
   let t7;
   if ($[8] === Symbol.for("react.memo_cache_sentinel")) {
@@ -150,7 +154,8 @@ export function Notifications(t0) {
   }
   const editor = t8;
   const shouldShowExternalEditorHint = isInputWrapped && !isShowingCompactMessage && apiKeyStatus !== "invalid" && apiKeyStatus !== "missing" && editor !== undefined;
-  const authStatusMessage = isEnvTruthy(process.env.CLAUDE_CODE_REMOTE) ? 'Authentication error · Try again' : activeProfile.type === 'anthropic' ? 'Not logged in · Run /login' : activeProfile.apiKeyEnv ? `Missing ${activeProfile.apiKeyEnv} · Check /login or /config` : `Provider config incomplete · Check /login or /config`;
+  const apiKeyEnvNames = getLLMProfileApiKeyEnvNames(activeProfile);
+  const authStatusMessage = isEnvTruthy(process.env.CLAUDE_CODE_REMOTE) ? 'Authentication error · Try again' : activeProfile.type === 'anthropic' ? 'Not logged in · Run /login' : apiKeyEnvNames.length > 0 ? `Missing ${apiKeyEnvNames.join(' or ')} · Set env, then use /login or /config` : `Provider config incomplete · Check /login or /config`;
   let t10;
   let t9;
   if ($[10] !== addNotification || $[11] !== removeNotification || $[12] !== shouldShowExternalEditorHint) {

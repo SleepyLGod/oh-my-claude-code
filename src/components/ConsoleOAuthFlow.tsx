@@ -10,11 +10,19 @@ import { getSSLErrorHint } from '../services/api/errorUtils.js';
 import { sendNotification } from '../services/notifier.js';
 import { OAuthService } from '../services/oauth/index.js';
 import {
+  getConfiguredLLMProfileApiKeyEnv,
+  getLLMProfileApiKeyEnvNames,
   getLLMProfileDisplayName,
+  getLLMProfileProtocolLabel,
   getLLMProfileNames,
   getResolvedLLMProfileByName,
+  isThirdPartyLLMProfile,
 } from '../services/llm/config.js';
-import { buildLLMSelectionSettingsPatch } from '../services/llm/selection.js';
+import {
+  buildLLMSelectionSettingsPatch,
+  getBlockingLLMProfileEnvOverride,
+  getLLMProfileEnvOverrideMessage,
+} from '../services/llm/selection.js';
 import { getOauthAccountInfo, validateForceLoginOrg } from '../utils/auth.js';
 import { logError } from '../utils/log.js';
 import {
@@ -26,7 +34,7 @@ import { KeyboardShortcutHint } from './design-system/KeyboardShortcutHint.js';
 import { Spinner } from './Spinner.js';
 import TextInput from './TextInput.js';
 type Props = {
-  onDone(): void;
+  onDone(message?: string): void;
   startingMessage?: string;
   mode?: 'login' | 'setup-token';
   forceLoginMethod?: 'claudeai' | 'console';
@@ -38,13 +46,13 @@ type OAuthStatus = {
   state: 'platform_setup';
 } // Show platform setup info (Bedrock/Vertex/Foundry)
 | {
-  state: 'openai_compat_setup';
-} // Select built-in OpenAI-compatible provider profiles
+  state: 'api_compat_setup';
+} // Select built-in third-party/API-compatible provider profiles
 | {
-  state: 'openai_compat_missing_env';
+  state: 'api_compat_missing_env';
   profileName: string;
   apiKeyEnv: string;
-} // Selected OpenAI-compatible profile is missing credentials
+} // Selected third-party/API-compatible profile is missing credentials
 | {
   state: 'ready_to_start';
 } // Flow started, waiting for browser to open
@@ -68,21 +76,37 @@ type OAuthStatus = {
 };
 const PASTE_HERE_MSG = 'Paste code here if prompted > ';
 
-type OpenAICompatibleProfileSummary = {
+type APICompatibleProfileSummary = {
   name: string;
   displayName: string;
   defaultModel?: string;
   apiKeyEnv?: string;
+  apiKeyEnvFallbacks?: string[];
+  protocol: string;
+  configuredApiKeyEnv?: string;
   hasCredentials: boolean;
 };
 
-function getOpenAICompatibleProfiles(
+function getAPICompatibleProfiles(
   settings = getSettings_DEPRECATED() || {},
-): OpenAICompatibleProfileSummary[] {
-  const preferredOrder = ['openai', 'deepseek', 'qwen'];
+): APICompatibleProfileSummary[] {
+  const preferredOrder = [
+    'openai',
+    'deepseek',
+    'deepseek-anthropic',
+    'qwen',
+    'qwen-anthropic',
+    'qwen-coding-openai',
+    'qwen-coding-anthropic',
+    'openrouter',
+    'nvidia_nim',
+    'ollama',
+    'lmstudio',
+    'llamacpp',
+  ];
   const profileNames = getLLMProfileNames(settings).filter(profileName => {
     const resolved = getResolvedLLMProfileByName(profileName, settings);
-    return resolved.type === 'openai_compat';
+    return isThirdPartyLLMProfile(resolved);
   });
 
   profileNames.sort((left, right) => {
@@ -103,7 +127,12 @@ function getOpenAICompatibleProfiles(
       displayName: getLLMProfileDisplayName(profileName, settings),
       defaultModel: resolved.defaultModel,
       apiKeyEnv: resolved.apiKeyEnv,
-      hasCredentials: !!(resolved.apiKeyEnv && process.env[resolved.apiKeyEnv]),
+      apiKeyEnvFallbacks: resolved.apiKeyEnvFallbacks,
+      protocol: getLLMProfileProtocolLabel(resolved),
+      configuredApiKeyEnv: getConfiguredLLMProfileApiKeyEnv(resolved),
+      hasCredentials:
+        resolved.requiresApiKey === false ||
+        !!getConfiguredLLMProfileApiKeyEnv(resolved),
     };
   });
 }
@@ -179,9 +208,9 @@ export function ConsoleOAuthFlow({
   // Handle Enter to continue from platform setup
   useKeybinding('confirm:yes', () => {
     setOAuthStatus(
-      oauthStatus.state === 'openai_compat_missing_env'
+      oauthStatus.state === 'api_compat_missing_env'
         ? {
-            state: 'openai_compat_setup'
+            state: 'api_compat_setup'
           }
         : {
             state: 'idle'
@@ -189,7 +218,7 @@ export function ConsoleOAuthFlow({
     );
   }, {
     context: 'Confirmation',
-    isActive: oauthStatus.state === 'platform_setup' || oauthStatus.state === 'openai_compat_missing_env'
+    isActive: oauthStatus.state === 'platform_setup' || oauthStatus.state === 'api_compat_missing_env'
   });
 
   // Handle Enter to retry on error state
@@ -324,38 +353,53 @@ export function ConsoleOAuthFlow({
       });
     }
   }, [oauthService, setShowPastePrompt, loginWithClaudeAi, mode, orgUUID]);
-  const handleOpenAICompatibleProfileSelect = useCallback((profileName: string) => {
+  const handleAPICompatibleProfileSelect = useCallback((profileName: string) => {
     const currentSettings = getSettings_DEPRECATED() || {};
     const resolved = getResolvedLLMProfileByName(profileName, currentSettings);
-    if (resolved.type !== 'openai_compat') {
+    if (!isThirdPartyLLMProfile(resolved)) {
       setOAuthStatus({
         state: 'error',
-        message: `Profile '${profileName}' is not an OpenAI-compatible provider profile.`,
+        message: `Profile '${profileName}' is not a third-party/API-compatible provider profile.`,
         toRetry: {
-          state: 'openai_compat_setup'
+          state: 'api_compat_setup'
         }
       });
       return;
     }
-    if (!resolved.apiKeyEnv) {
+    const envOverride = getBlockingLLMProfileEnvOverride(profileName);
+    if (envOverride) {
+      setOAuthStatus({
+        state: 'error',
+        message: getLLMProfileEnvOverrideMessage(profileName, envOverride),
+        toRetry: {
+          state: 'api_compat_setup'
+        }
+      });
+      return;
+    }
+    const apiKeyEnvNames = getLLMProfileApiKeyEnvNames(resolved)
+    if (resolved.requiresApiKey !== false && apiKeyEnvNames.length === 0) {
       setOAuthStatus({
         state: 'error',
         message: `Profile '${profileName}' is missing an apiKeyEnv setting.`,
         toRetry: {
-          state: 'openai_compat_setup'
+          state: 'api_compat_setup'
         }
       });
       return;
     }
-    if (!process.env[resolved.apiKeyEnv]) {
-      logEvent('tengu_oauth_openai_compat_missing_env', {
+    if (
+      resolved.requiresApiKey !== false &&
+      !getConfiguredLLMProfileApiKeyEnv(resolved)
+    ) {
+      logEvent('tengu_oauth_api_compat_missing_env', {
         profile_name: profileName as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-        api_key_env: resolved.apiKeyEnv as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS
+        api_key_env: apiKeyEnvNames.join('|') as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS
       });
       setOAuthStatus({
-        state: 'openai_compat_missing_env',
+        state: 'api_compat_missing_env',
         profileName,
-        apiKeyEnv: resolved.apiKeyEnv
+        apiKeyEnv: apiKeyEnvNames.join(' or ')
       });
       return;
     }
@@ -368,12 +412,12 @@ export function ConsoleOAuthFlow({
         state: 'error',
         message: result.error.message,
         toRetry: {
-          state: 'openai_compat_setup'
+          state: 'api_compat_setup'
         }
       });
       return;
     }
-    logEvent('tengu_oauth_openai_compat_profile_selected', {
+    logEvent('tengu_oauth_api_compat_profile_selected', {
       profile_name: profileName as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
       default_model: (resolved.defaultModel ?? 'default') as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS
     });
@@ -381,7 +425,7 @@ export function ConsoleOAuthFlow({
       message: `${getLLMProfileDisplayName(profileName, currentSettings)} provider ready`,
       notificationType: 'auth_success'
     }, terminal);
-    onDone();
+    onDone('Provider profile selected');
   }, [onDone, terminal]);
   const pendingOAuthStartRef = useRef(false);
   useEffect(() => {
@@ -447,7 +491,7 @@ export function ConsoleOAuthFlow({
             </Box>
           </Box>}
       <Box paddingLeft={1} flexDirection="column" gap={1}>
-        <OAuthStatusMessage oauthStatus={oauthStatus} mode={mode} startingMessage={startingMessage} forcedMethodMessage={forcedMethodMessage} showPastePrompt={showPastePrompt} pastedCode={pastedCode} setPastedCode={setPastedCode} cursorOffset={cursorOffset} setCursorOffset={setCursorOffset} textInputColumns={textInputColumns} handleSubmitCode={handleSubmitCode} setOAuthStatus={setOAuthStatus} setLoginWithClaudeAi={setLoginWithClaudeAi} handleOpenAICompatibleProfileSelect={handleOpenAICompatibleProfileSelect} />
+        <OAuthStatusMessage oauthStatus={oauthStatus} mode={mode} startingMessage={startingMessage} forcedMethodMessage={forcedMethodMessage} showPastePrompt={showPastePrompt} pastedCode={pastedCode} setPastedCode={setPastedCode} cursorOffset={cursorOffset} setCursorOffset={setCursorOffset} textInputColumns={textInputColumns} handleSubmitCode={handleSubmitCode} setOAuthStatus={setOAuthStatus} setLoginWithClaudeAi={setLoginWithClaudeAi} handleAPICompatibleProfileSelect={handleAPICompatibleProfileSelect} />
       </Box>
     </Box>;
 }
@@ -465,7 +509,7 @@ type OAuthStatusMessageProps = {
   handleSubmitCode: (value: string, url: string) => void;
   setOAuthStatus: (status: OAuthStatus) => void;
   setLoginWithClaudeAi: (value: boolean) => void;
-  handleOpenAICompatibleProfileSelect: (profileName: string) => void;
+  handleAPICompatibleProfileSelect: (profileName: string) => void;
 };
 function OAuthStatusMessage({
   oauthStatus,
@@ -481,15 +525,15 @@ function OAuthStatusMessage({
   handleSubmitCode,
   setOAuthStatus,
   setLoginWithClaudeAi,
-  handleOpenAICompatibleProfileSelect,
+  handleAPICompatibleProfileSelect,
 }: OAuthStatusMessageProps) {
   const currentSettings = getSettings_DEPRECATED() || {};
-  const openAICompatibleProfiles = getOpenAICompatibleProfiles(currentSettings);
+  const apiCompatibleProfiles = getAPICompatibleProfiles(currentSettings);
   const currentProviderProfile = currentSettings.llm?.providerProfile;
   const {
     profileName: missingProfileName,
     apiKeyEnv: missingApiKeyEnv,
-  } = oauthStatus.state === 'openai_compat_missing_env'
+  } = oauthStatus.state === 'api_compat_missing_env'
     ? oauthStatus
     : { profileName: '', apiKeyEnv: '' };
 
@@ -497,7 +541,7 @@ function OAuthStatusMessage({
     case 'idle': {
       const intro = startingMessage
         ? startingMessage
-        : 'Claude Code can be used with Anthropic accounts, Claude via supported cloud platforms, or OpenAI-compatible providers.';
+        : 'Claude Code can use Anthropic login, Claude via supported cloud platforms, or API-compatible provider profiles.';
 
       return (
         <Box flexDirection="column" gap={1} marginTop={1}>
@@ -541,14 +585,14 @@ function OAuthStatusMessage({
                 {
                   label: (
                     <Text>
-                      OpenAI-compatible provider{' '}
+                      Third-party/API-compatible provider{' '}
                       <Text dimColor>
-                        OpenAI, DeepSeek, Qwen, or custom base URL
+                        OpenAI, DeepSeek, Qwen, local runtimes, or custom base URL
                       </Text>
                       {'\n'}
                     </Text>
                   ),
-                  value: 'openai_compat',
+                  value: 'api_compat',
                 },
               ]}
               onChange={value => {
@@ -557,9 +601,9 @@ function OAuthStatusMessage({
                   setOAuthStatus({ state: 'platform_setup' });
                   return;
                 }
-                if (value === 'openai_compat') {
-                  logEvent('tengu_oauth_openai_compat_selected', {});
-                  setOAuthStatus({ state: 'openai_compat_setup' });
+                if (value === 'api_compat') {
+                  logEvent('tengu_oauth_api_compat_selected', {});
+                  setOAuthStatus({ state: 'api_compat_setup' });
                   return;
                 }
                 setOAuthStatus({ state: 'ready_to_start' });
@@ -621,16 +665,17 @@ function OAuthStatusMessage({
         </Box>
       );
 
-    case 'openai_compat_setup':
+    case 'api_compat_setup':
       return (
         <Box flexDirection="column" gap={1} marginTop={1}>
-          <Text bold>Using OpenAI-compatible providers</Text>
+          <Text bold>Using third-party/API-compatible providers</Text>
           <Text>
-            Select a provider profile. Profiles with configured credentials can
-            continue immediately without Claude OAuth.
+            Select a provider profile. Profiles show the protocol they use and
+            can continue immediately when credentials are already configured.
           </Text>
           <Text dimColor>
-            For custom base URLs or headers, use /config after startup.
+            This selects a provider profile. It does not store API keys. For
+            custom base URLs or headers, use /config after startup.
           </Text>
           <Box flexDirection="column" marginTop={1}>
             <Text dimColor>You can also launch directly:</Text>
@@ -643,24 +688,36 @@ function OAuthStatusMessage({
           </Box>
           <Box marginTop={1}>
             <Select
-              options={openAICompatibleProfiles.map(profile => ({
-                value: profile.name,
-                label: profile.displayName,
-                description: [
-                  currentProviderProfile === profile.name ? 'Current' : null,
-                  profile.defaultModel ? `Default ${profile.defaultModel}` : null,
-                  profile.apiKeyEnv
-                    ? profile.hasCredentials
-                      ? `${profile.apiKeyEnv} configured`
-                      : `Missing ${profile.apiKeyEnv}`
-                    : 'Missing apiKeyEnv setting',
-                ]
-                  .filter(Boolean)
-                  .join(' · '),
-              }))}
-              defaultValue={openAICompatibleProfiles.some(profile => profile.name === currentProviderProfile) ? currentProviderProfile : openAICompatibleProfiles[0]?.name}
-              visibleOptionCount={Math.min(8, openAICompatibleProfiles.length)}
-              onChange={handleOpenAICompatibleProfileSelect}
+              options={apiCompatibleProfiles.map(profile => {
+                const apiKeyEnvNames = [
+                  profile.apiKeyEnv,
+                  ...(profile.apiKeyEnvFallbacks ?? []),
+                ].filter((envName): envName is string => !!envName)
+                const credentialStatus =
+                  profile.hasCredentials
+                    ? profile.configuredApiKeyEnv
+                      ? `${profile.configuredApiKeyEnv} configured`
+                      : 'No API key required'
+                    : apiKeyEnvNames.length > 0
+                      ? `Missing ${apiKeyEnvNames.join(' or ')}`
+                      : 'Missing apiKeyEnv setting'
+
+                return {
+                  value: profile.name,
+                  label: profile.displayName,
+                  description: [
+                    currentProviderProfile === profile.name ? 'Current' : null,
+                    profile.protocol,
+                    profile.defaultModel ? `Default ${profile.defaultModel}` : null,
+                    credentialStatus,
+                  ]
+                    .filter(Boolean)
+                    .join(' · '),
+                }
+              })}
+              defaultValue={apiCompatibleProfiles.some(profile => profile.name === currentProviderProfile) ? currentProviderProfile : apiCompatibleProfiles[0]?.name}
+              visibleOptionCount={Math.min(8, apiCompatibleProfiles.length)}
+              onChange={handleAPICompatibleProfileSelect}
               onCancel={() => setOAuthStatus({ state: 'idle' })}
               layout="compact-vertical"
             />
@@ -668,7 +725,7 @@ function OAuthStatusMessage({
         </Box>
       );
 
-    case 'openai_compat_missing_env':
+    case 'api_compat_missing_env':
       return (
         <Box flexDirection="column" gap={1} marginTop={1}>
           <Text bold>{getLLMProfileDisplayName(missingProfileName, currentSettings)}</Text>

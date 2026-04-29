@@ -10,6 +10,24 @@ export type LLMSelection = {
   model: string | null
 }
 
+export function getBlockingLLMProfileEnvOverride(
+  profileName: string,
+  envOverride = process.env.CLAUDE_CODE_LLM_PROFILE,
+): string | null {
+  const override = envOverride?.trim()
+  if (!override || override === profileName) {
+    return null
+  }
+  return override
+}
+
+export function getLLMProfileEnvOverrideMessage(
+  profileName: string,
+  envOverride: string,
+): string {
+  return `This Claude Code process is locked to CLAUDE_CODE_LLM_PROFILE=${envOverride}. To use '${profileName}', unset CLAUDE_CODE_LLM_PROFILE and restart, or restart with CLAUDE_CODE_LLM_PROFILE=${profileName}.`
+}
+
 export function buildLLMSelectionSettingsPatch(
   settings: SettingsJson,
   selection: LLMSelection,
