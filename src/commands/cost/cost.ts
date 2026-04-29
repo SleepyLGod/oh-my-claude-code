@@ -23,5 +23,12 @@ export const call: LocalCommandCall = async () => {
     }
     return { type: 'text', value }
   }
-  return { type: 'text', value: formatTotalCost() }
+  const cost = formatTotalCost()
+  if (activeProfile.billingMode === 'subscription') {
+    return {
+      type: 'text',
+      value: `${cost}\n\nActive provider uses subscription/quota billing; token usage is shown, but dollar cost may be n/a for this profile.`,
+    }
+  }
+  return { type: 'text', value: cost }
 }

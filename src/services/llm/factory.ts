@@ -1,5 +1,6 @@
 import { getResolvedLLMProfile, getResolvedLLMProfileByName } from './config.js'
 import { AnthropicClient } from './AnthropicClient.js'
+import { AnthropicCompatibleClient } from './AnthropicCompatibleClient.js'
 import { MockClient } from './MockClient.js'
 import { OpenAICompatibleClient } from './OpenAICompatibleClient.js'
 import type { LLMClient } from './types.js'
@@ -10,6 +11,8 @@ export function getLLMClient(profileName?: string): LLMClient {
     : getResolvedLLMProfile()
 
   switch (profile.type) {
+    case 'anthropic_compat':
+      return new AnthropicCompatibleClient(profile.name, profile)
     case 'openai_compat':
       return new OpenAICompatibleClient(profile.name, profile)
     case 'mock':

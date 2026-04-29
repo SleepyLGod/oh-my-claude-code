@@ -4,7 +4,10 @@ import { getCwd } from '../../utils/cwd.js'
 import { getModelDisplayLabel } from '../../utils/status.js'
 import { getCurrentSessionTitle } from '../../utils/sessionStorage.js'
 import {
+  getConfiguredLLMProfileApiKeyEnv,
   getActiveLLMProfileName,
+  getLLMProfileApiKeyEnvNames,
+  getLLMProfileProtocolLabel,
   getResolvedLLMProfile,
 } from '../../services/llm/config.js'
 import { checkRecordingAvailability } from '../../services/voice.js'
@@ -193,6 +196,8 @@ export async function collectEnvReport(
   const repoRoot = getCwd()
   const profileName = getActiveLLMProfileName()
   const profile = getResolvedLLMProfile()
+  const apiKeyEnvNames = getLLMProfileApiKeyEnvNames(profile)
+  const configuredApiKeyEnv = getConfiguredLLMProfileApiKeyEnv(profile)
   const remote = await formatRemoteStatus(repoRoot)
   const [voiceStatus, deepLinkStatus] = await Promise.all([
     formatVoiceStatus(),
@@ -214,7 +219,18 @@ export async function collectEnvReport(
         entries: [
           {
             label: 'Provider profile',
-            value: `${profileName} (${profile.displayName ?? profile.name} · ${profile.type})`,
+            value: `${profileName} (${profile.displayName ?? profile.name} · ${getLLMProfileProtocolLabel(profile)})`,
+          },
+          {
+            label: 'Provider credentials',
+            value:
+              profile.requiresApiKey === false
+                ? 'not required'
+                : configuredApiKeyEnv
+                  ? `${configuredApiKeyEnv} configured`
+                  : apiKeyEnvNames.length > 0
+                    ? `missing ${apiKeyEnvNames.join(' or ')}`
+                    : 'not configured',
           },
           {
             label: 'Model',

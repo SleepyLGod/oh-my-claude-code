@@ -87,16 +87,32 @@ export const PermissionsSchema = lazySchema(() =>
 export const LLMProfileSchema = lazySchema(() =>
   z.object({
     type: z
-      .enum(['anthropic', 'openai_compat', 'mock'])
+      .enum(['anthropic', 'anthropic_compat', 'openai_compat', 'mock'])
       .describe('LLM provider implementation for this profile'),
     baseURL: z
       .string()
       .optional()
-      .describe('Base URL for OpenAI-compatible providers'),
+      .describe('Base URL for API-compatible providers'),
     apiKeyEnv: z
       .string()
       .optional()
       .describe('Environment variable name containing the API key'),
+    apiKeyEnvFallbacks: z
+      .array(z.string())
+      .optional()
+      .describe('Fallback environment variable names containing the API key'),
+    apiKeyHeader: z
+      .enum(['x-api-key', 'authorization-bearer'])
+      .optional()
+      .describe('Authentication header style for API-compatible providers'),
+    requiresApiKey: z
+      .boolean()
+      .optional()
+      .describe('Whether this profile requires an API key header'),
+    billingMode: z
+      .enum(['token', 'subscription', 'local', 'unknown'])
+      .optional()
+      .describe('How cost display should treat this profile'),
     defaultModel: z
       .string()
       .optional()
@@ -116,7 +132,11 @@ export const LLMProfileSchema = lazySchema(() =>
     streaming: z
       .enum(['auto', 'enabled', 'disabled'])
       .optional()
-      .describe('Streaming behavior for OpenAI-compatible providers'),
+      .describe('Streaming behavior for API-compatible providers'),
+    includeUsageInStream: z
+      .boolean()
+      .optional()
+      .describe('Request usage accounting chunks from streaming providers'),
   }),
 )
 

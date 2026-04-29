@@ -48,6 +48,14 @@ export function modelSupports1M(model: string): boolean {
   return canonical.includes('claude-sonnet-4') || canonical.includes('opus-4-6')
 }
 
+function isDeepSeekV4Model(model: string): boolean {
+  if (is1mContextDisabled()) {
+    return false
+  }
+  const canonical = getCanonicalName(model)
+  return canonical === 'deepseek-v4-flash' || canonical === 'deepseek-v4-pro'
+}
+
 export function getContextWindowForModel(
   model: string,
   betas?: string[],
@@ -68,6 +76,10 @@ export function getContextWindowForModel(
 
   // [1m] suffix — explicit client-side opt-in, respected over all detection
   if (has1mContext(model)) {
+    return 1_000_000
+  }
+
+  if (isDeepSeekV4Model(model)) {
     return 1_000_000
   }
 

@@ -13,7 +13,11 @@ import type { EffortValue } from 'src/utils/effort.js'
 import type { SystemPrompt } from 'src/utils/systemPromptType.js'
 import type { ThinkingConfig } from 'src/utils/thinking.js'
 
-export type LLMProfileType = 'anthropic' | 'openai_compat' | 'mock'
+export type LLMProfileType =
+  | 'anthropic'
+  | 'anthropic_compat'
+  | 'openai_compat'
+  | 'mock'
 
 export type LLMToolChoice =
   | { type: 'auto' | 'any' }

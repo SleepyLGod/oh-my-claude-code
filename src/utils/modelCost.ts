@@ -137,6 +137,22 @@ export const COST_QWEN_TURBO = {
   webSearchRequests: 0,
 } as const satisfies ModelCosts
 
+export const COST_QWEN_FLASH = {
+  inputTokens: 0.029,
+  outputTokens: 0.287,
+  promptCacheWriteTokens: 0.029,
+  promptCacheReadTokens: 0.029,
+  webSearchRequests: 0,
+} as const satisfies ModelCosts
+
+export const COST_QWEN_35_PLUS = {
+  inputTokens: 0.115,
+  outputTokens: 0.688,
+  promptCacheWriteTokens: 0.115,
+  promptCacheReadTokens: 0.115,
+  webSearchRequests: 0,
+} as const satisfies ModelCosts
+
 export const COST_QWEN_MAX = {
   inputTokens: 0.345,
   outputTokens: 1.377,
@@ -188,7 +204,13 @@ export const MODEL_COSTS: Record<ModelShortName, ModelCosts> = {
   'deepseek-v4-pro': COST_DEEPSEEK_V4_PRO,
   'qwen-plus': COST_QWEN_PLUS,
   'qwen-turbo': COST_QWEN_TURBO,
+  'qwen-flash': COST_QWEN_FLASH,
   'qwen-max': COST_QWEN_MAX,
+  'qwen3.5-plus': COST_QWEN_35_PLUS,
+  'qwen3.5-flash': COST_QWEN_FLASH,
+  'qwen3-coder-plus': COST_QWEN_35_PLUS,
+  'qwen3-coder-flash': COST_QWEN_FLASH,
+  'qwen3-max': COST_QWEN_MAX,
 }
 
 /**
@@ -208,7 +230,8 @@ function tokensToUSDCost(modelCosts: ModelCosts, usage: Usage): number {
 }
 
 export function getModelCosts(model: string, usage: Usage): ModelCosts {
-  const shortName = getCanonicalName(model)
+  const normalizedModel = model.replace(/\[(1|2)m\]$/i, '')
+  const shortName = getCanonicalName(normalizedModel)
 
   // Check if this is an Opus 4.6 model with fast mode active.
   if (
@@ -226,10 +249,26 @@ export function getModelCosts(model: string, usage: Usage): ModelCosts {
     if (shortName.startsWith('qwen-turbo')) {
       return COST_QWEN_TURBO
     }
+    if (
+      shortName.startsWith('qwen-flash') ||
+      shortName.startsWith('qwen3.5-flash') ||
+      shortName.startsWith('qwen3-coder-flash')
+    ) {
+      return COST_QWEN_FLASH
+    }
+    if (
+      shortName.startsWith('qwen3.5-plus') ||
+      shortName.startsWith('qwen3-coder-plus')
+    ) {
+      return COST_QWEN_35_PLUS
+    }
     if (shortName.startsWith('qwen-max')) {
       return COST_QWEN_MAX
     }
-    trackUnknownModelCost(model, shortName)
+    if (shortName.startsWith('qwen3-max')) {
+      return COST_QWEN_MAX
+    }
+    trackUnknownModelCost(normalizedModel, shortName)
     return (
       MODEL_COSTS[getCanonicalName(getDefaultMainLoopModelSetting())] ??
       DEFAULT_UNKNOWN_MODEL_COST
