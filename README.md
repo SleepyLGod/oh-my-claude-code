@@ -24,8 +24,10 @@ recovery effort.
 
 - This is a modified fork, not an untouched upstream snapshot.
 - The tree was made runnable again after reconstruction from source maps.
-- The project now includes additional OpenAI-compatible provider workflows,
-  including DeepSeek and Qwen support.
+- The project now includes additional API-compatible provider workflows,
+  including OpenAI-compatible and Anthropic-compatible DeepSeek/Qwen paths,
+  OpenRouter, NVIDIA NIM, and local runtimes such as Ollama, LM Studio, and
+  llama.cpp.
 - The CLI is branded as `Von Claude Code` in user-facing surfaces.
 - The fork exposes additional local commands such as `/buddy`, `/files`,
   `/tag`, and `/version`.
@@ -52,8 +54,13 @@ recovery effort.
 See [docs/slash-commands-reference.md](docs/slash-commands-reference.md) for
 the current command surface and compatibility notes.
 
-See [docs/fork-roadmap.md](docs/fork-roadmap.md) for the current short
-roadmap and the design constraints for new fork-specific commands.
+See [docs/fork-roadmap.md](docs/fork-roadmap.md) for the canonical short
+roadmap, current TODOs, and the design constraints for new fork-specific
+commands.
+
+See [docs/llm-provider-profiles.md](docs/llm-provider-profiles.md) for the
+provider profile model, built-in API-compatible profiles, real smoke-test
+commands, and current streaming/cache-accounting limitations.
 
 ## OpenClaw integration
 

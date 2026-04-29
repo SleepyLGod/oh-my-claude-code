@@ -157,7 +157,7 @@ source tree.
 | Command / Area | Current state | Notes |
 | --- | --- | --- |
 | `/model` | usable, modified | Provider-aware in this fork. Supports switching provider profiles and models, not just Anthropic model aliases. |
-| `/login` | usable, modified | The interactive flow now includes Anthropic account login, Claude via supported cloud platforms, and OpenAI-compatible provider profile selection. |
+| `/login` | usable, modified | The interactive flow now includes Anthropic account login, Claude via supported cloud platforms, and API-compatible provider profile selection for OpenAI-compatible and Anthropic-compatible profiles. |
 | `/buddy` | usable, modified | Fork-specific local command that exposes the existing companion subsystem. Hatch, pet, and mute state are local and deterministic; no model call is used. |
 | `/mcp` | usable as a manager | The management UI is present, but some specific MCP backends in this tree are restored compatibility shims rather than original implementations. |
 | `/chrome` | partial | The Claude in Chrome MCP backend is a restored compatibility shim. Browser actions are explicitly unavailable in this workspace. |
