@@ -6,6 +6,8 @@ type SmokeProfile = {
   baseURL: string
   keyEnvs: string[]
   authHeader?: 'x-api-key' | 'authorization-bearer'
+  requiresApiKey?: boolean
+  localServer?: boolean
   defaultModels: string[]
   allModels: string[]
 }
@@ -16,6 +18,7 @@ type SmokeResult = {
   model: string
   check: string
   ok: boolean
+  skipped?: boolean
   detail: string
 }
 
@@ -123,10 +126,65 @@ const PROFILES: SmokeProfile[] = [
       'qwen3-coder-flash',
     ],
   },
+  {
+    name: 'openrouter',
+    protocol: 'openai',
+    baseURL: 'https://openrouter.ai/api/v1',
+    keyEnvs: ['OPENROUTER_API_KEY'],
+    defaultModels: ['openrouter/auto'],
+    allModels: [
+      'openrouter/auto',
+      'deepseek/deepseek-chat',
+      'anthropic/claude-sonnet-4.5',
+      'openai/gpt-4.1',
+    ],
+  },
+  {
+    name: 'nvidia_nim',
+    protocol: 'openai',
+    baseURL: 'https://integrate.api.nvidia.com/v1',
+    keyEnvs: ['NVIDIA_API_KEY', 'NVIDIA_NIM_API_KEY'],
+    defaultModels: ['nvidia/llama-3.3-nemotron-super-49b-v1.5'],
+    allModels: [
+      'nvidia/llama-3.3-nemotron-super-49b-v1.5',
+      'nvidia/llama-3.3-nemotron-super-49b-v1',
+    ],
+  },
+  {
+    name: 'ollama',
+    protocol: 'openai',
+    baseURL: 'http://127.0.0.1:11434/v1',
+    keyEnvs: [],
+    requiresApiKey: false,
+    localServer: true,
+    defaultModels: ['llama3.1'],
+    allModels: ['llama3.1', 'qwen2.5-coder', 'mistral'],
+  },
+  {
+    name: 'lmstudio',
+    protocol: 'openai',
+    baseURL: 'http://127.0.0.1:1234/v1',
+    keyEnvs: [],
+    requiresApiKey: false,
+    localServer: true,
+    defaultModels: ['local-model'],
+    allModels: ['local-model'],
+  },
+  {
+    name: 'llamacpp',
+    protocol: 'openai',
+    baseURL: 'http://127.0.0.1:8080/v1',
+    keyEnvs: [],
+    requiresApiKey: false,
+    localServer: true,
+    defaultModels: ['local-model'],
+    allModels: ['local-model'],
+  },
 ]
 
 const args = new Set(process.argv.slice(2))
 const runAllModels = args.has('--all-models')
+const listOnly = args.has('--list') || args.has('--dry-run')
 const requestedProfile = process.argv
   .find(arg => arg.startsWith('--profile='))
   ?.slice('--profile='.length)
@@ -142,6 +200,9 @@ function getApiKey(profile: SmokeProfile): string | undefined {
 function buildHeaders(profile: SmokeProfile, apiKey: string): HeadersInit {
   const headers: Record<string, string> = {
     'content-type': 'application/json',
+  }
+  if (profile.requiresApiKey === false) {
+    return headers
   }
   if (profile.protocol === 'anthropic') {
     headers['anthropic-version'] = '2023-06-01'
@@ -171,6 +232,25 @@ async function postJson(
     throw new Error(`HTTP ${response.status}: ${text.slice(0, 240)}`)
   }
   return JSON.parse(text)
+}
+
+async function checkLocalOpenAIEndpoint(baseURL: string): Promise<string | null> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 1_500)
+  try {
+    const response = await fetch(`${baseURL}/models`, {
+      method: 'GET',
+      signal: controller.signal,
+    })
+    if (response.ok) return null
+    return `local endpoint ${baseURL} returned HTTP ${response.status}`
+  } catch (error) {
+    return `local endpoint ${baseURL} is not reachable: ${
+      error instanceof Error ? error.message : String(error)
+    }`
+  } finally {
+    clearTimeout(timeout)
+  }
 }
 
 async function postStream(
@@ -306,20 +386,38 @@ async function runCheck(
 
 async function runProfile(profile: SmokeProfile): Promise<SmokeResult[]> {
   const apiKey = getApiKey(profile)
-  if (!apiKey) {
+  if (profile.requiresApiKey !== false && !apiKey) {
     return [
       {
         profile: profile.name,
         protocol: profile.protocol,
         model: '-',
         check: 'credentials',
-        ok: false,
+        ok: true,
+        skipped: true,
         detail: `missing ${profile.keyEnvs.join(' or ')}`,
       },
     ]
   }
 
-  const headers = buildHeaders(profile, apiKey)
+  if (profile.localServer) {
+    const localError = await checkLocalOpenAIEndpoint(profile.baseURL)
+    if (localError) {
+      return [
+        {
+          profile: profile.name,
+          protocol: profile.protocol,
+          model: '-',
+          check: 'local-server',
+          ok: true,
+          skipped: true,
+          detail: localError,
+        },
+      ]
+    }
+  }
+
+  const headers = buildHeaders(profile, apiKey ?? '')
   const models = runAllModels ? profile.allModels : profile.defaultModels
   const results: SmokeResult[] = []
 
@@ -372,9 +470,22 @@ async function runProfile(profile: SmokeProfile): Promise<SmokeResult[]> {
 
 function printResults(results: SmokeResult[]): void {
   for (const result of results) {
-    const status = result.ok ? 'PASS' : 'FAIL'
+    const status = result.skipped ? 'SKIP' : result.ok ? 'PASS' : 'FAIL'
     console.log(
       `${status}\t${result.profile}\t${result.protocol}\t${result.model}\t${result.check}\t${result.detail}`,
+    )
+  }
+}
+
+function printProfileList(profiles: SmokeProfile[]): void {
+  for (const profile of profiles) {
+    const models = runAllModels ? profile.allModels : profile.defaultModels
+    const keyText =
+      profile.requiresApiKey === false
+        ? 'none'
+        : profile.keyEnvs.join(' or ')
+    console.log(
+      `${profile.name}\t${profile.protocol}\t${profile.baseURL}\tkeys=${keyText}\tmodels=${models.join(',')}`,
     )
   }
 }
@@ -388,6 +499,11 @@ if (requestedProfile && profiles.length === 0) {
   process.exit(2)
 }
 
+if (listOnly) {
+  printProfileList(profiles)
+  process.exit(0)
+}
+
 const results = (await Promise.all(profiles.map(runProfile))).flat()
 printResults(results)
-process.exit(results.every(result => result.ok) ? 0 : 1)
+process.exit(results.every(result => result.ok || result.skipped) ? 0 : 1)

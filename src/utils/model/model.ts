@@ -458,8 +458,11 @@ export function getPublicModelName(model: ModelName): string {
 export function parseUserSpecifiedModel(
   modelInput: ModelName | ModelAlias,
 ): ModelName {
-  const modelInputTrimmed = modelInput.trim()
+  const rawModelInput = modelInput.trim()
+  const hasNoThinkingTag = hasNoThinkingModelTag(rawModelInput)
+  const modelInputTrimmed = stripNoThinkingModelTag(rawModelInput)
   const normalizedModel = modelInputTrimmed.toLowerCase()
+  const localSuffix = hasNoThinkingTag ? '[no-thinking]' : ''
 
   const has1mTag = has1mContext(normalizedModel)
   const modelString = has1mTag
@@ -469,15 +472,15 @@ export function parseUserSpecifiedModel(
   if (isModelAlias(modelString)) {
     switch (modelString) {
       case 'opusplan':
-        return getDefaultSonnetModel() + (has1mTag ? '[1m]' : '') // Sonnet is default, Opus in plan mode
+        return getDefaultSonnetModel() + (has1mTag ? '[1m]' : '') + localSuffix // Sonnet is default, Opus in plan mode
       case 'sonnet':
-        return getDefaultSonnetModel() + (has1mTag ? '[1m]' : '')
+        return getDefaultSonnetModel() + (has1mTag ? '[1m]' : '') + localSuffix
       case 'haiku':
-        return getDefaultHaikuModel() + (has1mTag ? '[1m]' : '')
+        return getDefaultHaikuModel() + (has1mTag ? '[1m]' : '') + localSuffix
       case 'opus':
-        return getDefaultOpusModel() + (has1mTag ? '[1m]' : '')
+        return getDefaultOpusModel() + (has1mTag ? '[1m]' : '') + localSuffix
       case 'best':
-        return getBestModel()
+        return getBestModel() + localSuffix
       default:
     }
   }
@@ -492,7 +495,7 @@ export function parseUserSpecifiedModel(
     isLegacyOpusFirstParty(modelString) &&
     isLegacyModelRemapEnabled()
   ) {
-    return getDefaultOpusModel() + (has1mTag ? '[1m]' : '')
+    return getDefaultOpusModel() + (has1mTag ? '[1m]' : '') + localSuffix
   }
 
   if (process.env.USER_TYPE === 'ant') {
@@ -502,7 +505,7 @@ export function parseUserSpecifiedModel(
     const antModel = resolveAntModel(baseAntModel)
     if (antModel) {
       const suffix = has1mAntTag ? '[1m]' : ''
-      return antModel.model + suffix
+      return antModel.model + suffix + localSuffix
     }
 
     // Fall through to the alias string if we cannot load the config. The API calls
@@ -513,9 +516,9 @@ export function parseUserSpecifiedModel(
   // Preserve original case for custom model names (e.g., Azure Foundry deployment IDs)
   // Only strip [1m] suffix if present, maintaining case of the base model
   if (has1mTag) {
-    return modelInputTrimmed.replace(/\[1m\]$/i, '').trim() + '[1m]'
+    return modelInputTrimmed.replace(/\[1m\]$/i, '').trim() + '[1m]' + localSuffix
   }
-  return modelInputTrimmed
+  return modelInputTrimmed + localSuffix
 }
 
 /**
@@ -627,5 +630,13 @@ export function getMarketingNameForModel(modelId: string): string | undefined {
 }
 
 export function normalizeModelStringForAPI(model: string): string {
-  return model.replace(/\[(1|2)m\]/gi, '')
+  return stripNoThinkingModelTag(model).replace(/\[(1|2)m\]/gi, '')
+}
+
+export function hasNoThinkingModelTag(model: string): boolean {
+  return /\[no-thinking\]$/i.test(model.trim())
+}
+
+export function stripNoThinkingModelTag(model: string): string {
+  return model.replace(/\[no-thinking\]$/i, '').trim()
 }

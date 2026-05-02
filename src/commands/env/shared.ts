@@ -237,6 +237,10 @@ export async function collectEnvReport(
             value: getModelDisplayLabel(appState.mainLoopModel),
           },
           {
+            label: 'Provider capabilities',
+            value: formatProviderCapabilities(profile),
+          },
+          {
             label: 'Permission mode',
             value: appState.toolPermissionContext.mode,
           },
@@ -277,6 +281,24 @@ export async function collectEnvReport(
       },
     ],
   }
+}
+
+function formatProviderCapabilities(profile: {
+  supportsModelList?: boolean
+  supportsThinking?: boolean
+  supportsToolCalls?: boolean
+  supportsUsage?: boolean
+  localServer?: boolean
+}): string {
+  return [
+    profile.supportsModelList === false ? 'static models' : 'model list',
+    profile.supportsToolCalls === false ? 'no tools' : 'tools',
+    profile.supportsThinking === false ? 'no thinking' : 'thinking',
+    profile.supportsUsage === false ? 'usage unknown' : 'usage',
+    profile.localServer ? 'local server' : null,
+  ]
+    .filter(Boolean)
+    .join(' · ')
 }
 
 export function formatEnvReportAsText(report: EnvReport): string {

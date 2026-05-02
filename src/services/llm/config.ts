@@ -18,6 +18,11 @@ export type LLMProfileConfig = {
   suggestedModels?: string[]
   streaming?: LLMProfileStreamingMode
   includeUsageInStream?: boolean
+  supportsModelList?: boolean
+  supportsThinking?: boolean
+  supportsToolCalls?: boolean
+  supportsUsage?: boolean
+  localServer?: boolean
 }
 
 export type ResolvedLLMProfile = LLMProfileConfig & {
@@ -49,6 +54,9 @@ const BUILTIN_PROFILES: Record<string, LLMProfileConfig> = {
     suggestedModels: ['gpt-4.1', 'gpt-4.1-mini', 'o3'],
     streaming: 'enabled',
     includeUsageInStream: true,
+    supportsModelList: true,
+    supportsToolCalls: true,
+    supportsUsage: true,
   },
   deepseek: {
     type: 'openai_compat',
@@ -64,6 +72,10 @@ const BUILTIN_PROFILES: Record<string, LLMProfileConfig> = {
     ],
     streaming: 'enabled',
     includeUsageInStream: true,
+    supportsModelList: true,
+    supportsThinking: true,
+    supportsToolCalls: true,
+    supportsUsage: true,
   },
   'deepseek-anthropic': {
     type: 'anthropic_compat',
@@ -79,6 +91,10 @@ const BUILTIN_PROFILES: Record<string, LLMProfileConfig> = {
       'deepseek-reasoner',
     ],
     streaming: 'enabled',
+    supportsModelList: false,
+    supportsThinking: true,
+    supportsToolCalls: true,
+    supportsUsage: true,
   },
   qwen: {
     type: 'openai_compat',
@@ -103,6 +119,9 @@ const BUILTIN_PROFILES: Record<string, LLMProfileConfig> = {
     ],
     streaming: 'enabled',
     includeUsageInStream: true,
+    supportsModelList: true,
+    supportsToolCalls: true,
+    supportsUsage: true,
   },
   'qwen-anthropic': {
     type: 'anthropic_compat',
@@ -121,6 +140,10 @@ const BUILTIN_PROFILES: Record<string, LLMProfileConfig> = {
       'qwen3-coder-flash',
     ],
     streaming: 'enabled',
+    supportsModelList: false,
+    supportsThinking: true,
+    supportsToolCalls: true,
+    supportsUsage: true,
   },
   'qwen-coding-openai': {
     type: 'openai_compat',
@@ -140,6 +163,9 @@ const BUILTIN_PROFILES: Record<string, LLMProfileConfig> = {
     streaming: 'enabled',
     includeUsageInStream: true,
     billingMode: 'subscription',
+    supportsModelList: true,
+    supportsToolCalls: true,
+    supportsUsage: true,
   },
   'qwen-coding-anthropic': {
     type: 'anthropic_compat',
@@ -159,6 +185,10 @@ const BUILTIN_PROFILES: Record<string, LLMProfileConfig> = {
     ],
     streaming: 'enabled',
     billingMode: 'subscription',
+    supportsModelList: false,
+    supportsThinking: true,
+    supportsToolCalls: true,
+    supportsUsage: true,
   },
   openrouter: {
     type: 'openai_compat',
@@ -178,6 +208,10 @@ const BUILTIN_PROFILES: Record<string, LLMProfileConfig> = {
     ],
     streaming: 'enabled',
     includeUsageInStream: true,
+    supportsModelList: true,
+    supportsThinking: true,
+    supportsToolCalls: true,
+    supportsUsage: true,
   },
   nvidia_nim: {
     type: 'openai_compat',
@@ -191,6 +225,10 @@ const BUILTIN_PROFILES: Record<string, LLMProfileConfig> = {
       'nvidia/llama-3.3-nemotron-super-49b-v1',
     ],
     streaming: 'enabled',
+    supportsModelList: true,
+    supportsThinking: true,
+    supportsToolCalls: true,
+    supportsUsage: true,
   },
   ollama: {
     type: 'openai_compat',
@@ -201,6 +239,11 @@ const BUILTIN_PROFILES: Record<string, LLMProfileConfig> = {
     suggestedModels: ['llama3.1', 'qwen2.5-coder', 'mistral'],
     streaming: 'enabled',
     includeUsageInStream: true,
+    supportsModelList: true,
+    supportsThinking: true,
+    supportsToolCalls: true,
+    supportsUsage: true,
+    localServer: true,
   },
   lmstudio: {
     type: 'openai_compat',
@@ -210,6 +253,11 @@ const BUILTIN_PROFILES: Record<string, LLMProfileConfig> = {
     displayName: 'LM Studio',
     suggestedModels: ['local-model'],
     streaming: 'enabled',
+    supportsModelList: true,
+    supportsThinking: true,
+    supportsToolCalls: true,
+    supportsUsage: false,
+    localServer: true,
   },
   llamacpp: {
     type: 'openai_compat',
@@ -219,6 +267,11 @@ const BUILTIN_PROFILES: Record<string, LLMProfileConfig> = {
     displayName: 'llama.cpp',
     suggestedModels: ['local-model'],
     streaming: 'enabled',
+    supportsModelList: true,
+    supportsThinking: true,
+    supportsToolCalls: true,
+    supportsUsage: false,
+    localServer: true,
   },
 }
 

@@ -19,6 +19,8 @@ feature imitation.
    - preserve stable request payloads so provider-side prompt caching is not defeated by local randomness
    - verify provider/model support with real smoke checks before treating a
      model list as complete
+   - keep provider proxy, provider-side rate limiting, and concurrency controls
+     as explicit TODOs until a real smoke failure shows they are needed
 
 3. Input-system cleanup
    - finish the remaining `handleKeyDown` migration paths
@@ -55,6 +57,16 @@ feature imitation.
   OpenAI-compatible and Anthropic-compatible paths.
 - OpenRouter, NVIDIA NIM, Ollama, LM Studio, and llama.cpp: keep them as
   OpenAI-compatible profiles until there is a concrete need and documented
-  support for another transport.
+  support for another transport. They are now part of the smoke matrix, but
+  local profiles still require a running local OpenAI-compatible server.
+- Model discovery: `/model` now appends provider `/models` results for profiles
+  that opt in via `supportsModelList`; keep the static suggestions as the
+  curated safe defaults.
+- Anthropic-compatible thinking controls: `[no-thinking]` is a local model
+  suffix for provider profiles where thinking may be enabled; it is stripped
+  before API requests.
+- Provider runtime hardening: proxy support, profile-level rate limits, and
+  concurrency controls remain intentionally unimplemented until a concrete
+  provider requires them.
 - `/cost`: continue separating token usage from dollar cost for subscription
   or local providers.

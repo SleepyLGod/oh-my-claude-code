@@ -9,8 +9,12 @@ import {
   getLLMProfileProtocolLabel,
   getLLMProfileNames,
   getResolvedLLMProfileByName,
-  getSuggestedModelsForProfile,
 } from '../services/llm/config.js'
+import {
+  discoverModelsForProfile,
+  mergeModelSuggestions,
+} from '../services/llm/modelDiscovery.js'
+import type { LLMModelInfo } from '../services/llm/types.js'
 import { Select, type OptionWithDescription } from './CustomSelect/index.js'
 import { ModelPicker } from './ModelPicker.js'
 
@@ -43,6 +47,9 @@ export function MultiProviderModelPicker({
   const [step, setStep] = React.useState<'profile' | 'model'>(defaultStep)
   const [selectedProfileName, setSelectedProfileName] =
     React.useState(currentProfileName)
+  const [discoveryState, setDiscoveryState] = React.useState<
+    Record<string, { models: LLMModelInfo[]; loading: boolean; error?: string }>
+  >({})
 
   const profileOptions = React.useMemo<OptionWithDescription<string>[]>(() => {
     return getLLMProfileNames().map(profileName => {
@@ -78,13 +85,58 @@ export function MultiProviderModelPicker({
   const anthropicInitialModel =
     selectedProfileName === currentProfileName ? initialModel : null
   const effectiveDefaultModel = selectedProfile.defaultModel ?? 'default'
+  const selectedDiscovery = discoveryState[selectedProfileName]
+
+  React.useEffect(() => {
+    if (step !== 'model' || selectedProfile.type === 'anthropic') return
+    if (selectedProfile.supportsModelList === false) return
+    if (discoveryState[selectedProfileName]?.loading) return
+    if (discoveryState[selectedProfileName]?.models) return
+
+    let cancelled = false
+    setDiscoveryState(prev => ({
+      ...prev,
+      [selectedProfileName]: { models: [], loading: true },
+    }))
+    discoverModelsForProfile(selectedProfileName)
+      .then(models => {
+        if (cancelled) return
+        setDiscoveryState(prev => ({
+          ...prev,
+          [selectedProfileName]: { models, loading: false },
+        }))
+      })
+      .catch(error => {
+        if (cancelled) return
+        setDiscoveryState(prev => ({
+          ...prev,
+          [selectedProfileName]: {
+            models: [],
+            loading: false,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        }))
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    selectedProfile.supportsModelList,
+    selectedProfile.type,
+    selectedProfileName,
+    step,
+  ])
 
   const nonAnthropicOptions = React.useMemo<OptionWithDescription<string>[]>(() => {
-    const suggestedModels = getSuggestedModelsForProfile(selectedProfileName)
+    const suggestedModels = mergeModelSuggestions(
+      selectedProfileName,
+      selectedDiscovery?.models ?? [],
+    )
     const currentValue =
       selectedProfileName === currentProfileName ? initialModel : null
     const hasCustomCurrentModel =
-      !!currentValue && !suggestedModels.includes(currentValue)
+      !!currentValue && !suggestedModels.some(model => model.id === currentValue)
     const options: OptionWithDescription<string>[] = [
       {
         value: DEFAULT_MODEL_VALUE,
@@ -92,12 +144,31 @@ export function MultiProviderModelPicker({
         description: `Use ${effectiveDefaultModel}`,
       },
       ...suggestedModels.map(model => ({
-        value: model,
-        label: model,
+        value: model.id,
+        label: model.displayName ?? model.id,
         description:
-          model === effectiveDefaultModel ? 'Suggested default model' : undefined,
+          model.id === effectiveDefaultModel
+            ? 'Suggested default model'
+            : model.displayName && model.displayName !== model.id
+              ? model.id
+              : undefined,
       })),
     ]
+
+    if (selectedDiscovery?.loading) {
+      options.push({
+        value: '__DISCOVERY_LOADING__',
+        label: 'Discovering provider models...',
+        disabled: true,
+      })
+    } else if (selectedDiscovery?.error) {
+      options.push({
+        value: '__DISCOVERY_ERROR__',
+        label: 'Provider model discovery unavailable',
+        description: selectedDiscovery.error,
+        disabled: true,
+      })
+    }
 
     options.push({
       value: CUSTOM_MODEL_VALUE,
@@ -114,6 +185,9 @@ export function MultiProviderModelPicker({
     effectiveDefaultModel,
     initialModel,
     onSelect,
+    selectedDiscovery?.error,
+    selectedDiscovery?.loading,
+    selectedDiscovery?.models,
     selectedProfileName,
   ])
 
@@ -158,11 +232,14 @@ export function MultiProviderModelPicker({
 
   const currentValue =
     selectedProfileName === currentProfileName ? initialModel : null
-  const suggestedModels = getSuggestedModelsForProfile(selectedProfileName)
+  const suggestedModels = mergeModelSuggestions(
+    selectedProfileName,
+    selectedDiscovery?.models ?? [],
+  )
   const defaultValue =
     currentValue === null
       ? DEFAULT_MODEL_VALUE
-      : suggestedModels.includes(currentValue)
+      : suggestedModels.some(model => model.id === currentValue)
         ? currentValue
         : CUSTOM_MODEL_VALUE
 

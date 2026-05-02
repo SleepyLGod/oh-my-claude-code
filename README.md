@@ -60,7 +60,8 @@ commands.
 
 See [docs/llm-provider-profiles.md](docs/llm-provider-profiles.md) for the
 provider profile model, built-in API-compatible profiles, real smoke-test
-commands, and current streaming/cache-accounting limitations.
+commands, provider capability inventory, and current streaming/cache-accounting
+limitations.
 
 ## OpenClaw integration
 

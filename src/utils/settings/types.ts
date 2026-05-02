@@ -137,6 +137,26 @@ export const LLMProfileSchema = lazySchema(() =>
       .boolean()
       .optional()
       .describe('Request usage accounting chunks from streaming providers'),
+    supportsModelList: z
+      .boolean()
+      .optional()
+      .describe('Whether this profile supports listing provider models'),
+    supportsThinking: z
+      .boolean()
+      .optional()
+      .describe('Whether this profile supports thinking/reasoning requests'),
+    supportsToolCalls: z
+      .boolean()
+      .optional()
+      .describe('Whether this profile supports tool calls'),
+    supportsUsage: z
+      .boolean()
+      .optional()
+      .describe('Whether this profile returns token usage metadata'),
+    localServer: z
+      .boolean()
+      .optional()
+      .describe('Whether this profile requires a local provider server'),
   }),
 )
 

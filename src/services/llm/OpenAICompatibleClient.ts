@@ -3,7 +3,10 @@ import type { BetaUsage as Usage } from '@anthropic-ai/sdk/resources/beta/messag
 import { getSessionId } from 'src/bootstrap/state.js'
 import { addToTotalSessionCost } from 'src/cost-tracker.js'
 import { getUserAgent } from 'src/utils/http.js'
-import { createAssistantMessage } from 'src/utils/messages.js'
+import {
+  createAssistantAPIErrorMessage,
+  createAssistantMessage,
+} from 'src/utils/messages.js'
 import { normalizeMessagesForAPI } from 'src/utils/messages.js'
 import { safeParseJSON } from 'src/utils/json.js'
 import { toolToAPISchema } from 'src/utils/api.js'
@@ -16,9 +19,12 @@ import {
   getLLMProfileApiKeyEnvNames,
   shouldTrackLLMProfileDollarCost,
 } from './config.js'
+import { API_ERROR_MESSAGE_PREFIX } from '../api/errors.js'
+import { getDefaultMaxOutputTokensForLLM } from './maxTokens.js'
 import type {
   LLMClient,
   LLMClientCapabilities,
+  LLMModelInfo,
   LLMMainQueryRequest,
   LLMSideQueryRequest,
   LLMSideQueryResponse,
@@ -99,6 +105,29 @@ type StreamingToolCall = {
   started?: boolean
 }
 
+type TextSegment =
+  | { type: 'text'; text: string }
+  | { type: 'thinking'; thinking: string }
+
+type ParsedTextToolCall = {
+  name: string
+  argumentsText: string
+  raw: string
+}
+
+type ThinkTagParser = {
+  process(delta: string): TextSegment[]
+  flush(): TextSegment[]
+}
+
+type StreamState = {
+  text: string
+  reasoning: string
+  toolCalls: Iterable<StreamingToolCall>
+  usage?: OpenAIResponse['usage']
+  stopReason?: string | null
+}
+
 export class OpenAICompatibleClient implements LLMClient {
   constructor(
     public readonly profileName: string,
@@ -109,8 +138,8 @@ export class OpenAICompatibleClient implements LLMClient {
     return {
       providerType: 'openai_compat',
       supportsStreaming: this.profile.streaming !== 'disabled',
-      supportsToolCalling: true,
-      supportsThinking: false,
+      supportsToolCalling: this.profile.supportsToolCalls !== false,
+      supportsThinking: this.profile.supportsThinking ?? false,
     }
   }
 
@@ -118,10 +147,13 @@ export class OpenAICompatibleClient implements LLMClient {
     request: LLMMainQueryRequest,
   ): AsyncGenerator<AssistantMessage | StreamEvent, void> {
     const tools = await this.buildToolsFromRuntime(request)
+    const maxTokens =
+      request.options.maxOutputTokensOverride ??
+      getDefaultMaxOutputTokensForLLM(request.options.model)
     const payload = {
       model: this.toProviderModel(request.options.model),
       messages: this.buildMainQueryMessages(request),
-      max_tokens: request.options.maxOutputTokensOverride,
+      max_tokens: maxTokens,
       temperature: request.options.temperatureOverride,
       ...(tools.length > 0
         ? {
@@ -140,18 +172,7 @@ export class OpenAICompatibleClient implements LLMClient {
     }
 
     const response = await this.createChatCompletion(payload, request.signal)
-
-    const usage = this.toAnthropicUsage(response.usage)
-    const resolvedModel = response.model || request.options.model
-    if (usage) {
-      addToTotalSessionCost(
-        this.calculateCost(resolvedModel, usage),
-        usage,
-        resolvedModel,
-      )
-    }
-
-    yield this.toAssistantMessage(response, usage)
+    yield* this.emitNonStreamingResponse(response, request, maxTokens)
   }
 
   async sideQuery(request: LLMSideQueryRequest): Promise<LLMSideQueryResponse> {
@@ -169,7 +190,7 @@ export class OpenAICompatibleClient implements LLMClient {
       stop: request.stop_sequences,
     }, request.signal)
 
-    return this.toSideQueryResponse(response, request.model)
+    return this.toSideQueryResponse(response, request)
   }
 
   async validateModel(
@@ -191,6 +212,24 @@ export class OpenAICompatibleClient implements LLMClient {
       const message = error instanceof Error ? error.message : String(error)
       return { valid: false, error: message }
     }
+  }
+
+  async listModels(): Promise<LLMModelInfo[]> {
+    if (this.profile.supportsModelList === false) {
+      return []
+    }
+
+    const response = await fetch(`${this.getBaseURL()}/models`, {
+      method: 'GET',
+      headers: this.buildHeaders(),
+    })
+
+    if (!response.ok) {
+      const text = await response.text()
+      throw new Error(this.formatHttpError(response.status, text))
+    }
+
+    return this.parseModelsList(await response.json())
   }
 
   private async buildToolsFromRuntime(
@@ -502,6 +541,7 @@ export class OpenAICompatibleClient implements LLMClient {
     let reasoningClosed = false
     let nextBlockIndex = 0
     const toolCalls = new Map<number, StreamingToolCall>()
+    const thinkTagParser = this.createThinkTagParser()
 
     yield this.streamEvent({
       type: 'message_start',
@@ -522,147 +562,195 @@ export class OpenAICompatibleClient implements LLMClient {
       },
     }, Date.now() - startedAt)
 
-    for await (const chunk of this.iterSSEChunks(stream)) {
-      usage = chunk.usage ?? usage
-      for (const choice of chunk.choices ?? []) {
-        stopReason = choice.finish_reason ?? stopReason
-        const delta = choice.delta
-        if (!delta) continue
-
-        if (delta.reasoning_content) {
-          if (reasoningIndex === undefined || reasoningClosed) {
-            reasoningIndex = nextBlockIndex++
-            reasoningClosed = false
-            yield this.streamEvent({
-              type: 'content_block_start',
-              index: reasoningIndex,
-              content_block: {
-                type: 'thinking',
-                thinking: '',
-                signature: '',
-              },
-            })
-          }
-          reasoning += delta.reasoning_content
-          yield this.streamEvent({
-            type: 'content_block_delta',
-            index: reasoningIndex,
-            delta: {
-              type: 'thinking_delta',
-              thinking: delta.reasoning_content,
-            },
-          })
-        }
-
-        if (delta.content) {
-          if (textIndex === undefined || textClosed) {
-            textIndex = nextBlockIndex++
-            textClosed = false
-            yield this.streamEvent({
-              type: 'content_block_start',
-              index: textIndex,
-              content_block: {
-                type: 'text',
-                text: '',
-              },
-            })
-          }
-          text += delta.content
-          yield this.streamEvent({
-            type: 'content_block_delta',
-            index: textIndex,
-            delta: {
-              type: 'text_delta',
-              text: delta.content,
-            },
-          })
-        }
-
-        for (const toolCallDelta of delta.tool_calls ?? []) {
-          const index = toolCallDelta.index ?? toolCalls.size
-          const existing = toolCalls.get(index) ?? {
-            argumentsText: '',
-            started: false,
-          }
-          const nextToolCall = {
-            id: toolCallDelta.id ?? existing.id,
-            name: toolCallDelta.function?.name ?? existing.name,
-            argumentsText:
-              existing.argumentsText + (toolCallDelta.function?.arguments ?? ''),
-            blockIndex: existing.blockIndex,
-            started: existing.started,
-          }
-          toolCalls.set(index, nextToolCall)
-
-          if (!nextToolCall.started && nextToolCall.name) {
-            if (reasoningIndex !== undefined && !reasoningClosed) {
-              yield this.streamEvent({
-                type: 'content_block_stop',
-                index: reasoningIndex,
-              })
-              reasoningClosed = true
-            }
-            if (textIndex !== undefined && !textClosed) {
-              yield this.streamEvent({
-                type: 'content_block_stop',
-                index: textIndex,
-              })
-              textClosed = true
-            }
-            nextToolCall.blockIndex = nextBlockIndex++
-            nextToolCall.started = true
-            yield this.streamEvent({
-              type: 'content_block_start',
-              index: nextToolCall.blockIndex,
-              content_block: {
-                type: 'tool_use',
-                id: nextToolCall.id || `tool_${index}`,
-                name: nextToolCall.name,
-                input: {},
-              },
-            })
-          }
-
-          const argumentsDelta = toolCallDelta.function?.arguments ?? ''
-          if (
-            nextToolCall.started &&
-            nextToolCall.blockIndex !== undefined &&
-            argumentsDelta
-          ) {
-            yield this.streamEvent({
-              type: 'content_block_delta',
-              index: nextToolCall.blockIndex,
-              delta: {
-                type: 'input_json_delta',
-                partial_json: argumentsDelta,
-              },
-            })
-          }
-        }
-      }
-    }
-
-    if (reasoningIndex !== undefined && !reasoningClosed) {
-      yield this.streamEvent({
-        type: 'content_block_stop',
-        index: reasoningIndex,
-      })
-      reasoningClosed = true
-    }
-    if (textIndex !== undefined && !textClosed) {
-      yield this.streamEvent({
-        type: 'content_block_stop',
-        index: textIndex,
-      })
-      textClosed = true
-    }
-    for (const toolCall of toolCalls.values()) {
-      if (toolCall.started && toolCall.blockIndex !== undefined) {
+    const emitThinking = function* (
+      this: OpenAICompatibleClient,
+      thinkingDelta: string,
+    ): Generator<StreamEvent, void> {
+      if (!thinkingDelta) return
+      if (reasoningIndex === undefined || reasoningClosed) {
+        reasoningIndex = nextBlockIndex++
+        reasoningClosed = false
         yield this.streamEvent({
-          type: 'content_block_stop',
-          index: toolCall.blockIndex,
+          type: 'content_block_start',
+          index: reasoningIndex,
+          content_block: {
+            type: 'thinking',
+            thinking: '',
+            signature: '',
+          },
         })
       }
+      reasoning += thinkingDelta
+      yield this.streamEvent({
+        type: 'content_block_delta',
+        index: reasoningIndex,
+        delta: {
+          type: 'thinking_delta',
+          thinking: thinkingDelta,
+        },
+      })
+    }.bind(this)
+
+    const emitText = function* (
+      this: OpenAICompatibleClient,
+      textDelta: string,
+    ): Generator<StreamEvent, void> {
+      if (!textDelta) return
+      if (textIndex === undefined || textClosed) {
+        textIndex = nextBlockIndex++
+        textClosed = false
+        yield this.streamEvent({
+          type: 'content_block_start',
+          index: textIndex,
+          content_block: {
+            type: 'text',
+            text: '',
+          },
+        })
+      }
+      text += textDelta
+      yield this.streamEvent({
+        type: 'content_block_delta',
+        index: textIndex,
+        delta: {
+          type: 'text_delta',
+          text: textDelta,
+        },
+      })
+    }.bind(this)
+
+    const closeOpenBlocks = function* (
+      this: OpenAICompatibleClient,
+    ): Generator<StreamEvent, void> {
+      if (reasoningIndex !== undefined && !reasoningClosed) {
+        yield this.streamEvent({
+          type: 'content_block_stop',
+          index: reasoningIndex,
+        })
+        reasoningClosed = true
+      }
+      if (textIndex !== undefined && !textClosed) {
+        yield this.streamEvent({
+          type: 'content_block_stop',
+          index: textIndex,
+        })
+        textClosed = true
+      }
+      for (const toolCall of toolCalls.values()) {
+        if (toolCall.started && toolCall.blockIndex !== undefined) {
+          yield this.streamEvent({
+            type: 'content_block_stop',
+            index: toolCall.blockIndex,
+          })
+          toolCall.started = false
+        }
+      }
+    }.bind(this)
+
+    try {
+      for await (const chunk of this.iterSSEChunks(stream)) {
+        usage = chunk.usage ?? usage
+        for (const choice of chunk.choices ?? []) {
+          stopReason = choice.finish_reason ?? stopReason
+          const delta = choice.delta
+          if (!delta) continue
+
+          if (delta.reasoning_content) {
+            yield* emitThinking(delta.reasoning_content)
+          }
+
+          if (delta.content) {
+            for (const segment of thinkTagParser.process(delta.content)) {
+              if (segment.type === 'thinking') {
+                yield* emitThinking(segment.thinking)
+              } else {
+                yield* emitText(segment.text)
+              }
+            }
+          }
+
+          for (const toolCallDelta of delta.tool_calls ?? []) {
+            const index = toolCallDelta.index ?? toolCalls.size
+            const existing = toolCalls.get(index) ?? {
+              argumentsText: '',
+              started: false,
+            }
+            const nextToolCall = {
+              id: toolCallDelta.id ?? existing.id,
+              name: toolCallDelta.function?.name ?? existing.name,
+              argumentsText:
+                existing.argumentsText + (toolCallDelta.function?.arguments ?? ''),
+              blockIndex: existing.blockIndex,
+              started: existing.started,
+            }
+            toolCalls.set(index, nextToolCall)
+
+            if (!nextToolCall.started && nextToolCall.name) {
+              yield* closeOpenBlocks()
+              nextToolCall.blockIndex = nextBlockIndex++
+              nextToolCall.started = true
+              yield this.streamEvent({
+                type: 'content_block_start',
+                index: nextToolCall.blockIndex,
+                content_block: {
+                  type: 'tool_use',
+                  id: nextToolCall.id || `tool_${index}`,
+                  name: nextToolCall.name,
+                  input: {},
+                },
+              })
+            }
+
+            const argumentsDelta = toolCallDelta.function?.arguments ?? ''
+            if (
+              nextToolCall.started &&
+              nextToolCall.blockIndex !== undefined &&
+              argumentsDelta
+            ) {
+              yield this.streamEvent({
+                type: 'content_block_delta',
+                index: nextToolCall.blockIndex,
+                delta: {
+                  type: 'input_json_delta',
+                  partial_json: argumentsDelta,
+                },
+              })
+            }
+          }
+        }
+      }
+    } catch (error) {
+      yield* closeOpenBlocks()
+      if (!this.hasStartedToolUse(toolCalls)) {
+        yield* this.emitStreamingFallback(request, payload)
+        return
+      }
+      throw new Error(
+        `OpenAI-compatible streaming response failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      )
+    }
+
+    for (const segment of thinkTagParser.flush()) {
+      if (segment.type === 'thinking') {
+        yield* emitThinking(segment.thinking)
+      } else {
+        yield* emitText(segment.text)
+      }
+    }
+    yield* closeOpenBlocks()
+
+    if (
+      !this.hasAssistantOutput({
+        text,
+        reasoning,
+        toolCalls: toolCalls.values(),
+      }) &&
+      !stopReason
+    ) {
+      yield* this.emitStreamingFallback(request, payload)
+      return
     }
 
     const anthropicUsage = this.toAnthropicUsage(usage)
@@ -695,9 +783,18 @@ export class OpenAICompatibleClient implements LLMClient {
         text,
         reasoning,
         toolCalls: Array.from(toolCalls.values()),
+        allowedTextToolNames: this.getAllowedTextToolNames(request.tools),
       }) as never,
       usage: anthropicUsage as never,
     })
+
+    const maxTokensMessage = this.createMaxTokensMessage(
+      this.mapFinishReason(stopReason),
+      Number(payload.max_tokens),
+    )
+    if (maxTokensMessage) {
+      yield maxTokensMessage
+    }
   }
 
   private async *iterSSEChunks(
@@ -747,7 +844,11 @@ export class OpenAICompatibleClient implements LLMClient {
       return undefined
     }
 
-    return safeParseJSON(data) as OpenAIStreamChunk | undefined
+    const parsed = safeParseJSON(data)
+    if (!parsed || typeof parsed !== 'object') {
+      throw new Error(`Malformed SSE data: ${data.slice(0, 160)}`)
+    }
+    return parsed as OpenAIStreamChunk
   }
 
   private streamEvent(event: Record<string, unknown>, ttftMs?: number): StreamEvent {
@@ -756,6 +857,74 @@ export class OpenAICompatibleClient implements LLMClient {
       event,
       ...(ttftMs !== undefined ? { ttftMs } : {}),
     }
+  }
+
+  private async *emitStreamingFallback(
+    request: LLMMainQueryRequest,
+    payload: Record<string, unknown>,
+  ): AsyncGenerator<AssistantMessage | StreamEvent, void> {
+    const response = await this.createChatCompletion(payload, request.signal)
+    yield* this.emitNonStreamingResponse(
+      response,
+      request,
+      Number(payload.max_tokens),
+    )
+  }
+
+  private *emitNonStreamingResponse(
+    response: OpenAIResponse,
+    request: LLMMainQueryRequest,
+    maxTokens: number,
+    usage = this.toAnthropicUsage(response.usage),
+  ): Generator<AssistantMessage, void> {
+    const resolvedModel = response.model || request.options.model
+    if (usage) {
+      addToTotalSessionCost(
+        this.calculateCost(resolvedModel, usage),
+        usage,
+        resolvedModel,
+      )
+    }
+
+    yield this.toAssistantMessage(response, usage, request)
+
+    const maxTokensMessage = this.createMaxTokensMessage(
+      this.mapFinishReason(response.choices?.[0]?.finish_reason ?? null),
+      maxTokens,
+    )
+    if (maxTokensMessage) {
+      yield maxTokensMessage
+    }
+  }
+
+  private createMaxTokensMessage(
+    stopReason: string | null,
+    maxTokens: number,
+  ): AssistantMessage | undefined {
+    if (stopReason !== 'max_tokens') return undefined
+    return createAssistantAPIErrorMessage({
+      content: `${API_ERROR_MESSAGE_PREFIX}: Claude's response exceeded the ${maxTokens} output token maximum. To configure this behavior, set the CLAUDE_CODE_MAX_OUTPUT_TOKENS environment variable.`,
+      apiError: 'max_output_tokens',
+      error: 'max_output_tokens',
+    })
+  }
+
+  private hasStartedToolUse(toolCalls: Map<number, StreamingToolCall>): boolean {
+    return Array.from(toolCalls.values()).some(toolCall => toolCall.started)
+  }
+
+  private hasAssistantOutput({
+    text,
+    reasoning,
+    toolCalls,
+  }: StreamState): boolean {
+    return (
+      !!text ||
+      !!reasoning ||
+      Array.from(toolCalls).some(
+        toolCall => !!toolCall.name || !!toolCall.argumentsText,
+      )
+    )
   }
 
   private formatHttpError(status: number, bodyText: string): string {
@@ -783,6 +952,7 @@ export class OpenAICompatibleClient implements LLMClient {
   private toAssistantMessage(
     response: OpenAIResponse,
     usage = this.toAnthropicUsage(response.usage),
+    request?: LLMMainQueryRequest,
   ): AssistantMessage {
     const choice = response.choices?.[0]
     const message = choice?.message
@@ -796,6 +966,7 @@ export class OpenAICompatibleClient implements LLMClient {
           name: toolCall.function?.name,
           argumentsText: toolCall.function?.arguments ?? '',
         })),
+        allowedTextToolNames: this.getAllowedTextToolNames(request?.tools),
       }) as never,
       usage: usage as never,
     })
@@ -803,32 +974,56 @@ export class OpenAICompatibleClient implements LLMClient {
 
   private toSideQueryResponse(
     response: OpenAIResponse,
-    requestedModel: string,
+    request: LLMSideQueryRequest,
   ): LLMSideQueryResponse {
     const choice = response.choices?.[0]
-    const toolBlocks = (choice?.message?.tool_calls ?? []).map(toolCall => ({
+    const structuredToolBlocks = (choice?.message?.tool_calls ?? []).map(toolCall => ({
       type: 'tool_use' as const,
       id: toolCall.id || randomUUID(),
       name: toolCall.function?.name || 'unknown_tool',
       input: this.parseToolArguments(toolCall.function?.arguments),
     }))
-    const textBlock = choice?.message?.content
-      ? [{ type: 'text' as const, text: choice.message.content }]
+    const contentParts = this.extractThinkTags(choice?.message?.content ?? '')
+    const textToolCalls =
+      structuredToolBlocks.length === 0
+        ? this.parseTextToolCalls(
+            contentParts.text,
+            this.getAllowedTextToolNames(request.tools),
+          )
+        : []
+    const text = this.stripParsedToolCalls(contentParts.text, textToolCalls)
+    const textBlock = text
+      ? [{ type: 'text' as const, text }]
       : []
-    const thinkingBlock = choice?.message?.reasoning_content
+    const reasoning = [
+      choice?.message?.reasoning_content ?? '',
+      contentParts.reasoning,
+    ].filter(Boolean).join('\n\n')
+    const thinkingBlock = reasoning
       ? [
           {
             type: 'thinking' as const,
-            thinking: choice.message.reasoning_content,
+            thinking: reasoning,
             signature: '',
           },
         ]
       : []
+    const textToolBlocks = textToolCalls.map(toolCall => ({
+      type: 'tool_use' as const,
+      id: randomUUID(),
+      name: toolCall.name,
+      input: this.parseToolArguments(toolCall.argumentsText),
+    }))
 
     return {
       id: response.id || randomUUID(),
-      model: response.model || requestedModel,
-      content: [...thinkingBlock, ...textBlock, ...toolBlocks],
+      model: response.model || request.model,
+      content: [
+        ...thinkingBlock,
+        ...textBlock,
+        ...structuredToolBlocks,
+        ...textToolBlocks,
+      ],
       stop_reason: this.mapFinishReason(choice?.finish_reason ?? null),
       usage: this.toSideQueryUsage(response.usage),
     }
@@ -838,26 +1033,46 @@ export class OpenAICompatibleClient implements LLMClient {
     text,
     reasoning,
     toolCalls,
+    allowedTextToolNames,
   }: {
     text: string
     reasoning: string
     toolCalls: StreamingToolCall[]
+    allowedTextToolNames: Set<string>
   }): unknown {
+    const contentParts = this.extractThinkTags(text)
+    const parsedTextToolCalls =
+      toolCalls.length === 0
+        ? this.parseTextToolCalls(contentParts.text, allowedTextToolNames)
+        : []
+    const visibleText = this.stripParsedToolCalls(
+      contentParts.text,
+      parsedTextToolCalls,
+    )
+    const mergedReasoning = [reasoning, contentParts.reasoning]
+      .filter(Boolean)
+      .join('\n\n')
     const contentBlocks = [
-      ...(reasoning
+      ...(mergedReasoning
         ? [
             {
               type: 'thinking' as const,
-              thinking: reasoning,
+              thinking: mergedReasoning,
               signature: '',
             },
           ]
         : []),
-      ...(text ? [{ type: 'text' as const, text }] : []),
+      ...(visibleText ? [{ type: 'text' as const, text: visibleText }] : []),
       ...toolCalls.map(toolCall => ({
         type: 'tool_use' as const,
         id: toolCall.id || randomUUID(),
         name: toolCall.name || 'unknown_tool',
+        input: this.parseToolArguments(toolCall.argumentsText),
+      })),
+      ...parsedTextToolCalls.map(toolCall => ({
+        type: 'tool_use' as const,
+        id: randomUUID(),
+        name: toolCall.name,
         input: this.parseToolArguments(toolCall.argumentsText),
       })),
     ]
@@ -901,7 +1116,7 @@ export class OpenAICompatibleClient implements LLMClient {
       input_tokens: promptCacheMissTokens,
       output_tokens: usage.completion_tokens ?? 0,
       cache_read_input_tokens: promptCacheHitTokens,
-    }
+    } as Usage
   }
 
   private parseToolArguments(argumentsText: string | undefined): unknown {
@@ -913,6 +1128,237 @@ export class OpenAICompatibleClient implements LLMClient {
     }
   }
 
+  private getAllowedTextToolNames(
+    tools:
+      | ReadonlyArray<{ name: string; aliases?: readonly string[] }>
+      | undefined,
+  ): Set<string> {
+    const names = new Set<string>()
+    for (const tool of tools ?? []) {
+      names.add(tool.name)
+      for (const alias of tool.aliases ?? []) {
+        names.add(alias)
+      }
+    }
+    return names
+  }
+
+  private parseTextToolCalls(
+    text: string,
+    allowedToolNames: Set<string>,
+  ): ParsedTextToolCall[] {
+    if (allowedToolNames.size === 0) return []
+    const calls: ParsedTextToolCall[] = []
+    const xmlPattern =
+      /<function=([A-Za-z0-9_-]+)>([\s\S]*?)<\/function>/g
+    for (const match of text.matchAll(xmlPattern)) {
+      const [, name, body] = match
+      if (!allowedToolNames.has(name)) continue
+      const input: Record<string, unknown> = {}
+      for (const param of body.matchAll(
+        /<parameter=([A-Za-z0-9_-]+)>([\s\S]*?)<\/parameter>/g,
+      )) {
+        input[param[1]] = this.parseScalarToolParameter(param[2].trim())
+      }
+      calls.push({
+        name,
+        argumentsText: JSON.stringify(input),
+        raw: match[0],
+      })
+    }
+
+    const jsonCall = this.parseJSONTextToolCall(text, allowedToolNames)
+    if (jsonCall && !calls.some(call => call.raw === jsonCall.raw)) {
+      calls.push(jsonCall)
+    }
+    return calls
+  }
+
+  private parseJSONTextToolCall(
+    text: string,
+    allowedToolNames: Set<string>,
+  ): ParsedTextToolCall | undefined {
+    for (const candidate of this.extractJSONObjects(text)) {
+      const parsed = safeParseJSON(candidate)
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        continue
+      }
+      const record = parsed as Record<string, unknown>
+      const explicitName =
+        this.stringField(record, 'tool') ?? this.stringField(record, 'function')
+      const name = explicitName ?? this.stringField(record, 'name')
+      if (!name) continue
+      if (!allowedToolNames.has(name)) continue
+      const input =
+        this.objectField(record, 'parameters') ??
+        this.objectField(record, 'arguments') ??
+        this.objectField(record, 'input')
+      if (!explicitName && !input) continue
+      return {
+        name,
+        argumentsText: JSON.stringify(input ?? {}),
+        raw: candidate,
+      }
+    }
+    return undefined
+  }
+
+  private extractJSONObjects(text: string): string[] {
+    const candidates: string[] = []
+    for (let start = text.indexOf('{'); start !== -1; start = text.indexOf('{', start + 1)) {
+      let depth = 0
+      let inString = false
+      let escaped = false
+      for (let index = start; index < text.length; index++) {
+        const char = text[index]
+        if (inString) {
+          if (escaped) {
+            escaped = false
+          } else if (char === '\\') {
+            escaped = true
+          } else if (char === '"') {
+            inString = false
+          }
+          continue
+        }
+        if (char === '"') {
+          inString = true
+        } else if (char === '{') {
+          depth += 1
+        } else if (char === '}') {
+          depth -= 1
+          if (depth === 0) {
+            candidates.push(text.slice(start, index + 1))
+            break
+          }
+        }
+      }
+    }
+    return candidates
+  }
+
+  private stripParsedToolCalls(
+    text: string,
+    toolCalls: ParsedTextToolCall[],
+  ): string {
+    return toolCalls
+      .reduce((result, toolCall) => result.replace(toolCall.raw, ''), text)
+      .trim()
+  }
+
+  private parseScalarToolParameter(value: string): unknown {
+    const parsed = safeParseJSON(value)
+    return parsed ?? value
+  }
+
+  private stringField(
+    record: Record<string, unknown>,
+    name: string,
+  ): string | undefined {
+    const value = record[name]
+    return typeof value === 'string' && value.trim() ? value : undefined
+  }
+
+  private objectField(
+    record: Record<string, unknown>,
+    name: string,
+  ): Record<string, unknown> | undefined {
+    const value = record[name]
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : undefined
+  }
+
+  private extractThinkTags(text: string): { text: string; reasoning: string } {
+    let visibleText = text
+    const reasoning: string[] = []
+    visibleText = visibleText.replace(
+      /<think>([\s\S]*?)<\/think>/g,
+      (_match, thinking: string) => {
+        reasoning.push(thinking.trim())
+        return ''
+      },
+    )
+    return {
+      text: visibleText.trim(),
+      reasoning: reasoning.filter(Boolean).join('\n\n'),
+    }
+  }
+
+  private createThinkTagParser(): ThinkTagParser {
+    const openTag = '<think>'
+    const closeTag = '</think>'
+    let mode: 'text' | 'thinking' = 'text'
+    let carry = ''
+    let thinkingBuffer = ''
+
+    const splitSuffix = (value: string, tag: string): [string, string] => {
+      for (let length = Math.min(tag.length - 1, value.length); length > 0; length--) {
+        if (tag.startsWith(value.slice(-length))) {
+          return [value.slice(0, -length), value.slice(-length)]
+        }
+      }
+      return [value, '']
+    }
+
+    const process = (delta: string): TextSegment[] => {
+      const segments: TextSegment[] = []
+      let remaining = carry + delta
+      carry = ''
+
+      while (remaining) {
+        const tag = mode === 'text' ? openTag : closeTag
+        const tagIndex = remaining.indexOf(tag)
+        if (tagIndex !== -1) {
+          const before = remaining.slice(0, tagIndex)
+          if (mode === 'text') {
+            if (before) {
+              segments.push({ type: 'text', text: before })
+            }
+          } else if (thinkingBuffer || before) {
+            segments.push({
+              type: 'thinking',
+              thinking: thinkingBuffer + before,
+            })
+          }
+          thinkingBuffer = ''
+          mode = mode === 'text' ? 'thinking' : 'text'
+          remaining = remaining.slice(tagIndex + tag.length)
+          continue
+        }
+
+        const [emit, nextCarry] = splitSuffix(remaining, tag)
+        if (emit) {
+          if (mode === 'text') {
+            segments.push({ type: 'text', text: emit })
+          } else {
+            thinkingBuffer += emit
+          }
+        }
+        carry = nextCarry
+        break
+      }
+
+      return segments
+    }
+
+    const flush = (): TextSegment[] => {
+      if (!carry && !thinkingBuffer) return []
+      const segment =
+        mode === 'text'
+          ? { type: 'text' as const, text: carry }
+          : {
+              type: 'text' as const,
+              text: `${openTag}${thinkingBuffer}${carry}`,
+            }
+      carry = ''
+      thinkingBuffer = ''
+      return [segment]
+    }
+
+    return { process, flush }
+  }
+
   private calculateCost(model: string, usage: Usage): number {
     if (!shouldTrackLLMProfileDollarCost(this.profile)) return 0
     return calculateUSDCost(model, usage)
@@ -920,6 +1366,19 @@ export class OpenAICompatibleClient implements LLMClient {
 
   private toProviderModel(model: string): string {
     return normalizeModelStringForAPI(model)
+  }
+
+  private parseModelsList(value: unknown): LLMModelInfo[] {
+    if (!value || typeof value !== 'object') return []
+    const data = (value as { data?: unknown }).data
+    if (!Array.isArray(data)) return []
+    return data.flatMap(item => {
+      if (!item || typeof item !== 'object') return []
+      const record = item as Record<string, unknown>
+      const id = record.id
+      if (typeof id !== 'string' || !id.trim()) return []
+      return [{ id: id.trim() }]
+    })
   }
 
   private flattenContent(content: unknown): string {

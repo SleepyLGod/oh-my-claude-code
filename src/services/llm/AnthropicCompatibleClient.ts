@@ -4,9 +4,16 @@ import { getSessionId } from 'src/bootstrap/state.js'
 import { addToTotalSessionCost } from 'src/cost-tracker.js'
 import { getUserAgent } from 'src/utils/http.js'
 import { safeParseJSON } from 'src/utils/json.js'
-import { createAssistantMessage, normalizeMessagesForAPI } from 'src/utils/messages.js'
+import {
+  createAssistantAPIErrorMessage,
+  createAssistantMessage,
+  normalizeMessagesForAPI,
+} from 'src/utils/messages.js'
 import { calculateUSDCost } from 'src/utils/modelCost.js'
-import { normalizeModelStringForAPI } from 'src/utils/model/model.js'
+import {
+  hasNoThinkingModelTag,
+  normalizeModelStringForAPI,
+} from 'src/utils/model/model.js'
 import { toolToAPISchema } from 'src/utils/api.js'
 import type { Tool } from 'src/Tool.js'
 import type { AssistantMessage, StreamEvent } from 'src/types/message.js'
@@ -15,9 +22,12 @@ import {
   getLLMProfileApiKeyEnvNames,
   shouldTrackLLMProfileDollarCost,
 } from './config.js'
+import { API_ERROR_MESSAGE_PREFIX } from '../api/errors.js'
+import { getDefaultMaxOutputTokensForLLM } from './maxTokens.js'
 import type {
   LLMClient,
   LLMClientCapabilities,
+  LLMModelInfo,
   LLMMainQueryRequest,
   LLMSideQueryRequest,
   LLMSideQueryResponse,
@@ -75,22 +85,30 @@ export class AnthropicCompatibleClient implements LLMClient {
     return {
       providerType: 'anthropic_compat',
       supportsStreaming: this.profile.streaming !== 'disabled',
-      supportsToolCalling: true,
-      supportsThinking: true,
+      supportsToolCalling: this.profile.supportsToolCalls !== false,
+      supportsThinking: this.profile.supportsThinking !== false,
     }
   }
 
   async *streamMainQuery(
     request: LLMMainQueryRequest,
   ): AsyncGenerator<AssistantMessage | StreamEvent, void> {
+    const maxTokens =
+      request.options.maxOutputTokensOverride ??
+      getDefaultMaxOutputTokensForLLM(request.options.model)
     const payload = {
       model: this.toProviderModel(request.options.model),
-      max_tokens: request.options.maxOutputTokensOverride ?? 4096,
+      max_tokens: maxTokens,
       system: request.systemPrompt.join('\n\n'),
       messages: this.buildMainQueryMessages(request),
       temperature: request.options.temperatureOverride,
       tools: await this.buildToolsFromRuntime(request),
       tool_choice: request.options.toolChoice,
+      thinking: this.buildThinkingPayload(
+        request.options.model,
+        request.thinkingConfig,
+        maxTokens,
+      ),
     }
 
     if (this.profile.streaming !== 'disabled') {
@@ -101,6 +119,13 @@ export class AnthropicCompatibleClient implements LLMClient {
     const response = await this.createMessage(payload, request.signal)
     this.trackUsage(response.model || request.options.model, response.usage)
     yield this.toAssistantMessage(response)
+    const maxTokensMessage = this.createMaxTokensMessage(
+      response.stop_reason,
+      maxTokens,
+    )
+    if (maxTokensMessage) {
+      yield maxTokensMessage
+    }
   }
 
   async sideQuery(request: LLMSideQueryRequest): Promise<LLMSideQueryResponse> {
@@ -156,6 +181,24 @@ export class AnthropicCompatibleClient implements LLMClient {
       const message = error instanceof Error ? error.message : String(error)
       return { valid: false, error: message }
     }
+  }
+
+  async listModels(): Promise<LLMModelInfo[]> {
+    if (this.profile.supportsModelList === false) {
+      return []
+    }
+
+    const response = await fetch(`${this.getBaseURL()}/v1/models`, {
+      method: 'GET',
+      headers: this.buildHeaders(),
+    })
+
+    if (!response.ok) {
+      const text = await response.text()
+      throw new Error(this.formatHttpError(response.status, text))
+    }
+
+    return this.parseModelsList(await response.json())
   }
 
   private async buildToolsFromRuntime(
@@ -300,11 +343,18 @@ export class AnthropicCompatibleClient implements LLMClient {
     const blocks = new Map<number, StreamingBlock>()
     let model = String(payload.model || request.options.model)
     let usage: Usage | undefined
+    let stopReason: string | null = null
 
     for await (const event of this.iterSSEEvents(stream)) {
       if (event.message?.model) model = event.message.model
       usage = this.mergeUsage(usage, event.message?.usage)
       usage = this.mergeUsage(usage, event.usage)
+      if (
+        event.type === 'message_delta' &&
+        typeof event.delta?.stop_reason === 'string'
+      ) {
+        stopReason = event.delta.stop_reason
+      }
       this.updateStreamingBlocks(blocks, event)
       yield { type: 'stream_event', event: event as unknown as Record<string, unknown> }
     }
@@ -314,6 +364,13 @@ export class AnthropicCompatibleClient implements LLMClient {
       content: this.buildAssistantContentFromStreaming(blocks) as never,
       usage: usage as never,
     })
+    const maxTokensMessage = this.createMaxTokensMessage(
+      stopReason,
+      Number(payload.max_tokens),
+    )
+    if (maxTokensMessage) {
+      yield maxTokensMessage
+    }
   }
 
   private updateStreamingBlocks(
@@ -426,35 +483,33 @@ export class AnthropicCompatibleClient implements LLMClient {
   private buildAssistantContentFromStreaming(
     blocks: Map<number, StreamingBlock>,
   ): unknown {
-    const content = Array.from(blocks.entries())
-      .sort(([left], [right]) => left - right)
-      .flatMap(([, block]) => {
-        if (block.type === 'text' && block.text) {
-          return [{ type: 'text' as const, text: block.text }]
-        }
-        if (block.type === 'thinking' && block.thinking) {
-          return [
-            {
-              type: 'thinking' as const,
-              thinking: block.thinking,
-              signature: block.signature ?? '',
-            },
-          ]
-        }
-        if (block.type === 'tool_use') {
-          return [
-            {
-              type: 'tool_use' as const,
-              id: block.id || randomUUID(),
-              name: block.name || 'unknown_tool',
-              input: block.inputJson
-                ? this.parseToolInput(block.inputJson)
-                : (block.input ?? {}),
-            },
-          ]
-        }
-        return []
-      })
+    const content: AnthropicContentBlock[] = []
+    for (const [, block] of Array.from(blocks.entries()).sort(
+      ([left], [right]) => left - right,
+    )) {
+      if (block.type === 'text' && block.text) {
+        content.push({ type: 'text', text: block.text })
+        continue
+      }
+      if (block.type === 'thinking' && block.thinking) {
+        content.push({
+          type: 'thinking',
+          thinking: block.thinking,
+          signature: block.signature ?? '',
+        })
+        continue
+      }
+      if (block.type === 'tool_use') {
+        content.push({
+          type: 'tool_use',
+          id: block.id || randomUUID(),
+          name: block.name || 'unknown_tool',
+          input: block.inputJson
+            ? this.parseToolInput(block.inputJson)
+            : (block.input ?? {}),
+        })
+      }
+    }
     return content.length > 0 ? content : ''
   }
 
@@ -527,5 +582,75 @@ export class AnthropicCompatibleClient implements LLMClient {
 
   private toProviderModel(model: string): string {
     return normalizeModelStringForAPI(model)
+  }
+
+  private createMaxTokensMessage(
+    stopReason: string | null | undefined,
+    maxTokens: number,
+  ): AssistantMessage | undefined {
+    if (
+      stopReason !== 'max_tokens' &&
+      stopReason !== 'model_context_window_exceeded'
+    ) {
+      return undefined
+    }
+
+    const content =
+      stopReason === 'model_context_window_exceeded'
+        ? `${API_ERROR_MESSAGE_PREFIX}: The model has reached its context window limit.`
+        : `${API_ERROR_MESSAGE_PREFIX}: Claude's response exceeded the ${maxTokens} output token maximum. To configure this behavior, set the CLAUDE_CODE_MAX_OUTPUT_TOKENS environment variable.`
+
+    return createAssistantAPIErrorMessage({
+      content,
+      apiError: 'max_output_tokens',
+      error: 'max_output_tokens',
+    })
+  }
+
+  private buildThinkingPayload(
+    model: string,
+    thinkingConfig: LLMMainQueryRequest['thinkingConfig'],
+    maxTokens: number,
+  ): Record<string, unknown> | undefined {
+    if (
+      hasNoThinkingModelTag(model) ||
+      thinkingConfig.type === 'disabled' ||
+      this.profile.supportsThinking === false
+    ) {
+      return undefined
+    }
+
+    if (thinkingConfig.type === 'adaptive') {
+      return undefined
+    }
+
+    return {
+      type: 'enabled',
+      budget_tokens: Math.max(
+        1,
+        Math.min(thinkingConfig.budgetTokens, maxTokens - 1),
+      ),
+    }
+  }
+
+  private parseModelsList(value: unknown): LLMModelInfo[] {
+    if (!value || typeof value !== 'object') return []
+    const data = (value as { data?: unknown }).data
+    if (!Array.isArray(data)) return []
+    return data.flatMap(item => {
+      if (!item || typeof item !== 'object') return []
+      const record = item as Record<string, unknown>
+      const id = record.id
+      if (typeof id !== 'string' || !id.trim()) return []
+      const displayName = record.display_name
+      return [
+        {
+          id: id.trim(),
+          ...(typeof displayName === 'string' && displayName.trim()
+            ? { displayName: displayName.trim() }
+            : {}),
+        },
+      ]
+    })
   }
 }

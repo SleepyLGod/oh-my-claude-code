@@ -2,6 +2,7 @@ import { createAssistantMessage } from 'src/utils/messages.js'
 import type {
   LLMClient,
   LLMClientCapabilities,
+  LLMModelInfo,
   LLMMainQueryRequest,
   LLMSideQueryRequest,
   LLMSideQueryResponse,
@@ -41,5 +42,9 @@ export class MockClient implements LLMClient {
 
   async validateModel(): Promise<{ valid: boolean; error?: string }> {
     return { valid: true }
+  }
+
+  async listModels(): Promise<LLMModelInfo[]> {
+    return [{ id: 'mock-model' }]
   }
 }

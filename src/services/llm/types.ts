@@ -142,6 +142,12 @@ export type LLMClientCapabilities = {
   supportsThinking: boolean
 }
 
+export type LLMModelInfo = {
+  id: string
+  displayName?: string
+  supportsThinking?: boolean
+}
+
 export interface LLMClient {
   readonly profileName: string
 
@@ -151,4 +157,5 @@ export interface LLMClient {
   ): AsyncGenerator<StreamEvent | AssistantMessage | SystemAPIErrorMessage, void>
   sideQuery(request: LLMSideQueryRequest): Promise<LLMSideQueryResponse>
   validateModel(model: string): Promise<{ valid: boolean; error?: string }>
+  listModels(): Promise<LLMModelInfo[]>
 }

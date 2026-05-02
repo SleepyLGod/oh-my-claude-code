@@ -15,6 +15,7 @@ import { anthropicSideQuery } from './anthropicSideQuery.js'
 import type {
   LLMClient,
   LLMClientCapabilities,
+  LLMModelInfo,
   LLMMainQueryRequest,
   LLMSideQueryRequest,
   LLMSideQueryResponse,
@@ -94,6 +95,10 @@ export class AnthropicClient implements LLMClient {
     } catch (error) {
       return handleAnthropicValidationError(error, normalizedModel)
     }
+  }
+
+  async listModels(): Promise<LLMModelInfo[]> {
+    return (MODEL_ALIASES as readonly string[]).map(id => ({ id }))
   }
 }
 
