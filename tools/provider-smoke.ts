@@ -320,7 +320,7 @@ function openAIToolBody(model: string): unknown {
         },
       },
     ],
-    tool_choice: { type: 'function', function: { name: 'get_time' } },
+    tool_choice: 'auto',
   }
 }
 
@@ -345,7 +345,7 @@ function anthropicToolBody(model: string): unknown {
         input_schema: { type: 'object', properties: {} },
       },
     ],
-    tool_choice: { type: 'tool', name: 'get_time' },
+    tool_choice: { type: 'auto' },
   }
 }
 

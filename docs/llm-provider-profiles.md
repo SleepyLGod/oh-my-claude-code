@@ -267,14 +267,32 @@ bun tools/provider-smoke.ts --list
 bun tools/provider-smoke.ts --profile=ollama
 ```
 
-The smoke runner checks text, streaming, and forced tool-call behavior for each
-selected profile/model pair. It is intentionally separate from unit tests
+The smoke runner checks text, streaming, and tool-call behavior for each
+selected profile/model pair. Tool smoke uses provider-controlled/auto tool
+choice because several thinking models support structured tool calls but reject
+forced tool-choice payloads. It is intentionally separate from unit tests
 because it spends real provider quota and depends on network availability.
 For DeepSeek, the smoke runner uses the provider's official bare model ids; the
 user-facing `/model` picker shows `[1m]` variants only to make local context
 accounting explicit.
 Profiles with missing API keys are reported as `SKIP`, not `FAIL`. Local
 profiles are also skipped when their OpenAI-compatible server is not reachable.
+
+Latest local validation on 2026-05-03:
+
+| Profile | Models checked | Result | Notes |
+| --- | --- | --- | --- |
+| `deepseek` | `deepseek-v4-flash`, `deepseek-v4-pro` | PASS | Text, streaming, structured tool calls, and usage chunks passed through the OpenAI-compatible endpoint. |
+| `deepseek-anthropic` | `deepseek-v4-flash`, `deepseek-v4-pro` | PASS | Text, streaming, Anthropic-style tool use, and usage passed through the Anthropic-compatible endpoint. |
+| `qwen` | `qwen-plus`, `qwen3.5-plus`, `qwen3-coder-plus` | PASS | Text, streaming, structured tool calls, and usage passed through the DashScope OpenAI-compatible endpoint. |
+| `qwen-anthropic` | `qwen3.5-plus`, `qwen3-coder-plus` | PASS | Text, streaming, Anthropic-style tool use, and usage passed through the DashScope Anthropic-compatible endpoint. |
+| `qwen-coding-openai` | default smoke set | SKIP | No Coding Plan key was present in the environment. |
+| `qwen-coding-anthropic` | default smoke set | SKIP | No Coding Plan key was present in the environment. |
+| `openrouter` | `openrouter/auto` | SKIP | `OPENROUTER_API_KEY` was not present in the environment. |
+| `nvidia_nim` | default smoke set | SKIP | `NVIDIA_API_KEY`/`NVIDIA_NIM_API_KEY` was not present in the environment. |
+| `ollama` | `llama3.1` | SKIP | Local server was not reachable at `http://127.0.0.1:11434/v1`. |
+| `lmstudio` | `local-model` | SKIP | Local server was not reachable at `http://127.0.0.1:1234/v1`. |
+| `llamacpp` | `local-model` | SKIP | Local server was not reachable at `http://127.0.0.1:8080/v1`. |
 
 ## Known Limitations
 
