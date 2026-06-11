@@ -70,6 +70,12 @@ import {
 import { resolveAppliedEffort } from '../../utils/effort.js'
 import { isEnvTruthy } from '../../utils/envUtils.js'
 import { errorMessage } from '../../utils/errors.js'
+import {
+  createExecutionTraceId,
+  isExecutionTraceEnabled,
+  writeExecutionTraceArtifact,
+  writeExecutionTraceEvent,
+} from '../../utils/executionTrace.js'
 import { computeFingerprintFromMessages } from '../../utils/fingerprint.js'
 import { captureAPIRequest, logError } from '../../utils/log.js'
 import {
@@ -1772,6 +1778,10 @@ async function* queryModel(
   let research: unknown = undefined
   let isFastModeRequest = isFastMode // Keep separate state as it may change if falling back
   let isAdvisorInProgress = false
+  let activeLlmTraceId: string | undefined
+  let activeLlmTraceStartedAt = 0
+  const tracedStreamEvents: BetaRawMessageStreamEvent[] | undefined =
+    isExecutionTraceEnabled() ? [] : undefined
 
   try {
     queryCheckpoint('query_client_creation_start')
@@ -1798,6 +1808,36 @@ async function* queryModel(
         captureAPIRequest(params, options.querySource) // Capture for bug reports
 
         maxOutputTokens = params.max_tokens
+        clientRequestId =
+          getAPIProvider() === 'firstParty' && isFirstPartyAnthropicBaseUrl()
+            ? randomUUID()
+            : undefined
+        activeLlmTraceId = createExecutionTraceId('llm-call')
+        activeLlmTraceStartedAt = Date.now()
+        const requestArtifact = writeExecutionTraceArtifact(
+          'llm-call',
+          activeLlmTraceId,
+          'request',
+          {
+            querySource: options.querySource,
+            model: options.model,
+            attempt,
+            clientRequestId,
+            request: { ...params, stream: true },
+          },
+        )
+        writeExecutionTraceEvent('llm_call_start', {
+          trace_id: activeLlmTraceId,
+          query_source: options.querySource,
+          model: options.model,
+          normalized_model: params.model,
+          attempt,
+          message_count: params.messages.length,
+          tool_count: params.tools?.length ?? 0,
+          max_tokens: params.max_tokens,
+          request_artifact_path: requestArtifact?.path,
+          trace_write_ms: requestArtifact?.traceWriteMs,
+        })
 
         // Fire immediately before the fetch is dispatched. .withResponse() below
         // awaits until response headers arrive, so this MUST be before the await
@@ -1806,14 +1846,6 @@ async function* queryModel(
         if (!options.agentId) {
           headlessProfilerCheckpoint('api_request_sent')
         }
-
-        // Generate and track client request ID so timeouts (which return no
-        // server request ID) can still be correlated with server logs.
-        // First-party only — 3P providers don't log it (inc-4029 class).
-        clientRequestId =
-          getAPIProvider() === 'firstParty' && isFirstPartyAnthropicBaseUrl()
-            ? randomUUID()
-            : undefined
 
         // Use raw stream instead of BetaMessageStream to avoid O(n²) partial JSON parsing
         // BetaMessageStream calls partialParse() on every input_json_delta, which we don't need
@@ -1938,6 +1970,7 @@ async function* queryModel(
       let stallCount = 0
 
       for await (const part of stream) {
+        tracedStreamEvents?.push(part)
         resetStreamIdleTimer()
         const now = Date.now()
 
@@ -2401,9 +2434,61 @@ async function* queryModel(
         // Store headers for gateway detection
         responseHeaders = resp.headers
       }
+      if (activeLlmTraceId) {
+        const responseArtifact = writeExecutionTraceArtifact(
+          'llm-call',
+          activeLlmTraceId,
+          'response',
+          {
+            requestId: streamRequestId,
+            messages: newMessages,
+            usage,
+            stopReason,
+            rawEvents: tracedStreamEvents,
+          },
+        )
+        writeExecutionTraceEvent('llm_call_finish', {
+          trace_id: activeLlmTraceId,
+          query_source: options.querySource,
+          model: options.model,
+          request_id: streamRequestId,
+          input_tokens: usage.input_tokens,
+          output_tokens: usage.output_tokens,
+          cache_read_input_tokens: usage.cache_read_input_tokens,
+          cache_creation_input_tokens: usage.cache_creation_input_tokens,
+          stop_reason: stopReason,
+          duration_ms: Date.now() - activeLlmTraceStartedAt,
+          response_artifact_path: responseArtifact?.path,
+          trace_write_ms: responseArtifact?.traceWriteMs,
+        })
+      }
     } catch (streamingError) {
       // Clear the idle timeout watchdog on error path too
       clearStreamIdleTimers()
+      if (activeLlmTraceId) {
+        const errorArtifact = writeExecutionTraceArtifact(
+          'llm-call',
+          activeLlmTraceId,
+          'error',
+          {
+            requestId: streamRequestId,
+            error: streamingError,
+            rawEvents: tracedStreamEvents,
+          },
+        )
+        writeExecutionTraceEvent('llm_call_error', {
+          trace_id: activeLlmTraceId,
+          query_source: options.querySource,
+          model: options.model,
+          request_id: streamRequestId,
+          error_name:
+            streamingError instanceof Error ? streamingError.name : 'unknown',
+          error_message: errorMessage(streamingError),
+          duration_ms: Date.now() - activeLlmTraceStartedAt,
+          error_artifact_path: errorArtifact?.path,
+          trace_write_ms: errorArtifact?.traceWriteMs,
+        })
+      }
 
       // Instrumentation: if the watchdog had already fired and the for-await
       // threw (rather than exiting cleanly), record that the loop DID exit and
@@ -2602,6 +2687,29 @@ async function* queryModel(
     // an error message with no actual retry on the fallback model.
     if (errorFromRetry instanceof FallbackTriggeredError) {
       throw errorFromRetry
+    }
+    if (activeLlmTraceId) {
+      const errorArtifact = writeExecutionTraceArtifact(
+        'llm-call',
+        activeLlmTraceId,
+        'error',
+        {
+          requestId: streamRequestId,
+          error: errorFromRetry,
+          rawEvents: tracedStreamEvents,
+        },
+      )
+      writeExecutionTraceEvent('llm_call_error', {
+        trace_id: activeLlmTraceId,
+        query_source: options.querySource,
+        model: options.model,
+        request_id: streamRequestId,
+        error_name: errorFromRetry instanceof Error ? errorFromRetry.name : 'unknown',
+        error_message: errorMessage(errorFromRetry),
+        duration_ms: Date.now() - activeLlmTraceStartedAt,
+        error_artifact_path: errorArtifact?.path,
+        trace_write_ms: errorArtifact?.traceWriteMs,
+      })
     }
 
     // Check if this is a 404 error during stream creation that should trigger

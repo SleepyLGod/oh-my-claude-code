@@ -12,6 +12,11 @@ import { safeParseJSON } from 'src/utils/json.js'
 import { toolToAPISchema } from 'src/utils/api.js'
 import { calculateUSDCost } from 'src/utils/modelCost.js'
 import { normalizeModelStringForAPI } from 'src/utils/model/model.js'
+import {
+  errorExecutionTraceLlmCall,
+  finishExecutionTraceLlmCall,
+  startExecutionTraceLlmCall,
+} from 'src/utils/executionTrace.js'
 import type { Tool } from 'src/Tool.js'
 import type { AssistantMessage, StreamEvent } from 'src/types/message.js'
 import type { LLMProfileConfig } from './config.js'
@@ -431,32 +436,48 @@ export class OpenAICompatibleClient implements LLMClient {
     payload: Record<string, unknown>,
     signal?: AbortSignal,
   ): Promise<OpenAIResponse> {
-    const response = await fetch(`${this.getBaseURL()}/chat/completions`, {
-      method: 'POST',
-      headers: this.buildHeaders(),
-      body: JSON.stringify(payload),
-      signal,
+    const trace = startExecutionTraceLlmCall({
+      provider: 'openai_compat',
+      profileName: this.profileName,
+      model: payload.model,
+      endpoint: '/chat/completions',
+      streaming: false,
+      request: payload,
     })
 
-    if (!response.ok) {
-      const text = await response.text()
-      throw new Error(this.formatHttpError(response.status, text))
-    }
+    try {
+      const response = await fetch(`${this.getBaseURL()}/chat/completions`, {
+        method: 'POST',
+        headers: this.buildHeaders(),
+        body: JSON.stringify(payload),
+        signal,
+      })
 
-    return (await response.json()) as OpenAIResponse
+      if (!response.ok) {
+        const text = await response.text()
+        throw new Error(this.formatHttpError(response.status, text))
+      }
+
+      const json = (await response.json()) as OpenAIResponse
+      finishExecutionTraceLlmCall(trace, {
+        response: json,
+        requestId: json.id,
+        model: json.model,
+        usage: json.usage,
+        stopReason: json.choices?.[0]?.finish_reason,
+      })
+      return json
+    } catch (error) {
+      errorExecutionTraceLlmCall(trace, error)
+      throw error
+    }
   }
 
   private async createChatCompletionStream(
     payload: Record<string, unknown>,
     signal?: AbortSignal,
   ): Promise<ReadableStream<Uint8Array>> {
-    const streamPayload = {
-      ...payload,
-      stream: true,
-      ...(this.profile.includeUsageInStream
-        ? { stream_options: { include_usage: true } }
-        : {}),
-    }
+    const streamPayload = this.buildStreamingPayload(payload)
     const response = await fetch(`${this.getBaseURL()}/chat/completions`, {
       method: 'POST',
       headers: this.buildHeaders(),
@@ -524,13 +545,27 @@ export class OpenAICompatibleClient implements LLMClient {
   ): AsyncGenerator<AssistantMessage | StreamEvent, void> {
     yield { type: 'stream_request_start' }
 
-    const stream = await this.createChatCompletionStream(
-      payload,
-      request.signal,
-    )
+    const streamPayload = this.buildStreamingPayload(payload)
+    const trace = startExecutionTraceLlmCall({
+      provider: 'openai_compat',
+      profileName: this.profileName,
+      model: streamPayload.model,
+      endpoint: '/chat/completions',
+      streaming: true,
+      request: streamPayload,
+    })
+
+    let stream: ReadableStream<Uint8Array>
+    try {
+      stream = await this.createChatCompletionStream(payload, request.signal)
+    } catch (error) {
+      errorExecutionTraceLlmCall(trace, error)
+      throw error
+    }
     const messageId = randomUUID()
     const model = String(payload.model || request.options.model)
     const startedAt = Date.now()
+    const rawChunks: OpenAIStreamChunk[] = []
     let text = ''
     let reasoning = ''
     let usage: OpenAIResponse['usage'] | undefined
@@ -649,6 +684,7 @@ export class OpenAICompatibleClient implements LLMClient {
 
     try {
       for await (const chunk of this.iterSSEChunks(stream)) {
+        rawChunks.push(chunk)
         usage = chunk.usage ?? usage
         for (const choice of chunk.choices ?? []) {
           stopReason = choice.finish_reason ?? stopReason
@@ -720,6 +756,7 @@ export class OpenAICompatibleClient implements LLMClient {
         }
       }
     } catch (error) {
+      errorExecutionTraceLlmCall(trace, error)
       yield* closeOpenBlocks()
       if (!this.hasStartedToolUse(toolCalls)) {
         yield* this.emitStreamingFallback(request, payload)
@@ -787,6 +824,21 @@ export class OpenAICompatibleClient implements LLMClient {
       }) as never,
       usage: anthropicUsage as never,
     })
+    finishExecutionTraceLlmCall(trace, {
+      response: {
+        chunks: rawChunks,
+        text,
+        reasoning,
+        tool_calls: Array.from(toolCalls.values()),
+        usage,
+        anthropic_usage: anthropicUsage,
+        stop_reason: stopReason,
+      },
+      requestId: rawChunks.find(chunk => chunk.id)?.id,
+      model,
+      usage: anthropicUsage ?? usage,
+      stopReason,
+    })
 
     const maxTokensMessage = this.createMaxTokensMessage(
       this.mapFinishReason(stopReason),
@@ -829,6 +881,18 @@ export class OpenAICompatibleClient implements LLMClient {
       }
     } finally {
       reader.releaseLock()
+    }
+  }
+
+  private buildStreamingPayload(
+    payload: Record<string, unknown>,
+  ): Record<string, unknown> {
+    return {
+      ...payload,
+      stream: true,
+      ...(this.profile.includeUsageInStream
+        ? { stream_options: { include_usage: true } }
+        : {}),
     }
   }
 
