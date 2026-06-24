@@ -24,6 +24,7 @@ type CliOptions = {
   provider: string
   model: string
   locomoPath?: string
+  eventsJsonl?: string
   keepGoing: boolean
   runAutoDream: AutoDreamMode
   runDirectDream: DirectDreamMode
@@ -167,6 +168,7 @@ function usage(): string {
     `  --provider <name>            LLM profile. Default: ${DEFAULT_PROVIDER}`,
     `  --model <id>                 Model id. Default: ${DEFAULT_MODEL}`,
     '  --locomo-path <path>         Use local locomo10.json instead of downloading/caching.',
+    '  --events-jsonl <path>        Use pre-normalized BenchmarkEvent JSONL instead of LOCOMO slicing.',
     `  --run-autodream <mode>        Run autoDream after extraction: none|natural|seeded. Default: ${DEFAULT_AUTODREAM_MODE}`,
     `  --run-direct-dream <mode>     Run direct dream component after each window: none|each-window. Default: ${DEFAULT_DIRECT_DREAM_MODE}`,
     '  --trace                      Write detailed forked-agent and LLM trace artifacts under <output-dir>/trace.',
@@ -244,6 +246,11 @@ function parseArgs(argv: string[]): CliOptions {
       i += 1
       continue
     }
+    if (arg === '--events-jsonl') {
+      options.eventsJsonl = next
+      i += 1
+      continue
+    }
     if (arg === '--run-autodream') {
       if (next !== 'none' && next !== 'natural' && next !== 'seeded') {
         throw new Error('--run-autodream must be one of: none, natural, seeded')
@@ -266,6 +273,11 @@ function parseArgs(argv: string[]): CliOptions {
   if (options.runDirectDream !== 'none' && options.runAutoDream !== 'none') {
     throw new Error('--run-direct-dream cannot be combined with --run-autodream natural|seeded')
   }
+  if (options.eventsJsonl && options.locomoPath) {
+    throw new Error('--events-jsonl and --locomo-path are mutually exclusive')
+  }
+  if (options.eventsJsonl) options.eventsJsonl = resolve(options.eventsJsonl)
+  if (options.locomoPath) options.locomoPath = resolve(options.locomoPath)
 
   return options
 }
@@ -328,6 +340,30 @@ async function ensureLocomoDataset(options: CliOptions, cacheDir: string): Promi
   }
   writeFileSync(cachePath, await response.text())
   return cachePath
+}
+
+function loadRowsFromEventsJsonl(path: string): LocomoRow[] {
+  const lines = readFileSync(path, 'utf8')
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+  return lines.map((line, index) => {
+    const event = JSON.parse(line) as Record<string, unknown>
+    const message = stringValue(event.text) ?? stringValue(event.message) ?? ''
+    if (!message.trim()) {
+      throw new Error(`BenchmarkEvent JSONL row ${index + 1} is missing text`)
+    }
+    const sampleIndexValue = Number(event.sample_index ?? 1)
+    return {
+      row_index: index + 1,
+      sample_index: Number.isFinite(sampleIndexValue) ? sampleIndexValue : 1,
+      session_id: stringValue(event.session_id) ?? '',
+      turn_id: stringValue(event.event_id) ?? stringValue(event.turn_id) ?? `${index + 1}`,
+      speaker: stringValue(event.speaker) ?? '',
+      message: message.trim(),
+      timestamp: stringValue(event.timestamp) ?? '',
+    }
+  })
 }
 
 function loadLocomoRows(path: string): LocomoRow[] {
@@ -447,9 +483,16 @@ function buildWindows(rows: LocomoRow[], options: CliOptions): WindowInput[] {
   if (selected.length === 0) {
     throw new Error('No LOCOMO rows selected; check --start-row and --row-limit')
   }
+  return buildWindowsFromSelectedRows(selected, options.messagesPerWindow)
+}
+
+function buildWindowsFromSelectedRows(selected: LocomoRow[], messagesPerWindow: number): WindowInput[] {
+  if (selected.length === 0) {
+    throw new Error('No benchmark events selected')
+  }
   const windows: WindowInput[] = []
-  for (let i = 0; i < selected.length; i += options.messagesPerWindow) {
-    const chunk = selected.slice(i, i + options.messagesPerWindow)
+  for (let i = 0; i < selected.length; i += messagesPerWindow) {
+    const chunk = selected.slice(i, i + messagesPerWindow)
     const windowNumber = windows.length + 1
     windows.push({
       window_id: `window_${String(windowNumber).padStart(3, '0')}`,
@@ -467,7 +510,6 @@ function formatLocomoMessage(row: LocomoRow): string {
     `speaker: ${row.speaker}`,
     `message: ${row.message}`,
     `session_id: ${row.session_id}`,
-    `turn_id: ${row.turn_id}`,
     `timestamp: ${row.timestamp}`,
   ].join('\n')
 }
@@ -885,6 +927,7 @@ function writeRunMetadata(params: {
         model: options.model,
         row_limit: options.rowLimit,
         start_row: options.startRow,
+        events_jsonl: options.eventsJsonl ? resolve(options.eventsJsonl) : '',
         messages_per_window: options.messagesPerWindow,
         run_autodream: options.runAutoDream,
         run_direct_dream: options.runDirectDream,
@@ -1172,11 +1215,18 @@ async function main(): Promise<void> {
   })
   process.chdir(projectDir)
 
-  const locomoPath = await ensureLocomoDataset(options, cacheDir)
-  const rows = loadLocomoRows(locomoPath)
-  const startIndex = options.startRow - 1
-  const selectedRows = rows.slice(startIndex, startIndex + options.rowLimit)
-  const windows = buildWindows(rows, options)
+  let selectedRows: LocomoRow[]
+  let windows: WindowInput[]
+  if (options.eventsJsonl) {
+    selectedRows = loadRowsFromEventsJsonl(resolve(options.eventsJsonl))
+    windows = buildWindowsFromSelectedRows(selectedRows, options.messagesPerWindow)
+  } else {
+    const locomoPath = await ensureLocomoDataset(options, cacheDir)
+    const rows = loadLocomoRows(locomoPath)
+    const startIndex = options.startRow - 1
+    selectedRows = rows.slice(startIndex, startIndex + options.rowLimit)
+    windows = buildWindows(rows, options)
+  }
   writeInputs(inputDir, selectedRows, windows)
   writeRunMetadata({ runDir, projectDir, memoryBaseDir, configDir, options, windows })
 

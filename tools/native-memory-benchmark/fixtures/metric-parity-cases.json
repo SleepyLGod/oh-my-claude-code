@@ -1,0 +1,86 @@
+[
+  {
+    "name": "exact_contains",
+    "prediction": "The adoption agencies",
+    "gold_answer": "adoption agencies",
+    "category": "2",
+    "expected": {
+      "exact_match": true,
+      "contains_answer": true,
+      "token_f1": 1,
+      "locomo_answer_score": 1
+    }
+  },
+  {
+    "name": "porter_stemming",
+    "prediction": "running",
+    "gold_answer": "runs",
+    "category": "2",
+    "expected": {
+      "exact_match": false,
+      "contains_answer": false,
+      "token_f1": 1,
+      "locomo_answer_score": 1
+    }
+  },
+  {
+    "name": "category1_multi_answer",
+    "prediction": "Psychology, counseling",
+    "gold_answer": "psychology, counseling certification",
+    "category": "1",
+    "expected": {
+      "exact_match": false,
+      "contains_answer": false,
+      "token_f1": 0.8,
+      "locomo_answer_score": 0.833333
+    }
+  },
+  {
+    "name": "category3_semicolon",
+    "prediction": "psychology",
+    "gold_answer": "psychology; counseling certification",
+    "category": "3",
+    "expected": {
+      "exact_match": false,
+      "contains_answer": false,
+      "token_f1": 0.5,
+      "locomo_answer_score": 1
+    }
+  },
+  {
+    "name": "category5_no_info",
+    "prediction": "No information available in the memory.",
+    "gold_answer": "anything",
+    "category": "5",
+    "expected": {
+      "exact_match": false,
+      "contains_answer": false,
+      "token_f1": 0,
+      "locomo_answer_score": 1
+    }
+  },
+  {
+    "name": "category5_negative",
+    "prediction": "Caroline went yesterday.",
+    "gold_answer": "anything",
+    "category": "5",
+    "expected": {
+      "exact_match": false,
+      "contains_answer": false,
+      "token_f1": 0,
+      "locomo_answer_score": 0
+    }
+  },
+  {
+    "name": "empty_answer",
+    "prediction": "",
+    "gold_answer": "7 May 2023",
+    "category": "2",
+    "expected": {
+      "exact_match": false,
+      "contains_answer": false,
+      "token_f1": 0,
+      "locomo_answer_score": 0
+    }
+  }
+]
