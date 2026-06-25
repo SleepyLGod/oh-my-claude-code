@@ -1,4 +1,4 @@
-import { randomUUID } from 'crypto'
+import { createHash, randomUUID } from 'crypto'
 import {
   cpSync,
   existsSync,
@@ -10,7 +10,7 @@ import {
   utimesSync,
   writeFileSync,
 } from 'fs'
-import { basename, join, resolve } from 'path'
+import { basename, dirname, join, resolve } from 'path'
 import { withExecutionTraceContext } from '../../src/utils/executionTrace.ts'
 
 type AutoDreamMode = 'none' | 'natural' | 'seeded'
@@ -26,6 +26,7 @@ type CliOptions = {
   locomoPath?: string
   eventsJsonl?: string
   keepGoing: boolean
+  resume: boolean
   runAutoDream: AutoDreamMode
   runDirectDream: DirectDreamMode
   trace: boolean
@@ -128,6 +129,26 @@ type ForkedAgentFinish = {
   invalidReason: string
 }
 
+type ComponentCheckpointManifest = {
+  schema_version: number
+  provider: string
+  model: string
+  messages_per_window: number
+  run_autodream: AutoDreamMode
+  run_direct_dream: DirectDreamMode
+  keep_going: boolean
+  trace: boolean
+  windows_hash: string
+  completed_windows: number
+  last_window_id: string
+}
+
+type ComponentCheckpoint = {
+  manifest: ComponentCheckpointManifest
+  metrics: WindowMetric[]
+  directDreamMetrics: DirectDreamMetric[]
+}
+
 type LocomoTurnGroup = {
   session_key: string
   timestamp: string
@@ -143,6 +164,7 @@ const DEFAULT_AUTODREAM_MODE = 'none'
 const DEFAULT_DIRECT_DREAM_MODE = 'none'
 const SEEDED_AUTODREAM_SESSION_COUNT = 6
 const SEEDED_AUTODREAM_LOCK_AGE_HOURS = 48
+const CHECKPOINT_SCHEMA_VERSION = 1
 const TMP_PROJECT_ROOT = '/private/tmp/claude-code-native-memory-component-projects'
 const LOCOMO_URL =
   'https://raw.githubusercontent.com/snap-research/locomo/main/data/locomo10.json'
@@ -173,6 +195,7 @@ function usage(): string {
     `  --run-direct-dream <mode>     Run direct dream component after each window: none|each-window. Default: ${DEFAULT_DIRECT_DREAM_MODE}`,
     '  --trace                      Write detailed forked-agent and LLM trace artifacts under <output-dir>/trace.',
     '  --keep-going                 Continue after a failed window and mark failed rows.',
+    '  --resume                     Resume from <output-dir>/checkpoint. Requires --output-dir.',
     '  --help                       Show this help.',
     '',
     'Environment:',
@@ -188,6 +211,7 @@ function parseArgs(argv: string[]): CliOptions {
     provider: DEFAULT_PROVIDER,
     model: DEFAULT_MODEL,
     keepGoing: false,
+    resume: false,
     runAutoDream: DEFAULT_AUTODREAM_MODE,
     runDirectDream: DEFAULT_DIRECT_DREAM_MODE,
     trace: false,
@@ -202,6 +226,10 @@ function parseArgs(argv: string[]): CliOptions {
     }
     if (arg === '--keep-going') {
       options.keepGoing = true
+      continue
+    }
+    if (arg === '--resume') {
+      options.resume = true
       continue
     }
     if (arg === '--trace') {
@@ -278,6 +306,9 @@ function parseArgs(argv: string[]): CliOptions {
   }
   if (options.eventsJsonl) options.eventsJsonl = resolve(options.eventsJsonl)
   if (options.locomoPath) options.locomoPath = resolve(options.locomoPath)
+  if (options.resume && !options.outputDir) {
+    throw new Error('--resume requires --output-dir')
+  }
 
   return options
 }
@@ -547,6 +578,145 @@ function copyDirIfExists(from: string, to: string): boolean {
   ensureDir(to)
   cpSync(from, to, { recursive: true })
   return true
+}
+
+function readJsonl(path: string): Record<string, unknown>[] {
+  if (!existsSync(path)) return []
+  return readFileSync(path, 'utf8')
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map(line => JSON.parse(line) as Record<string, unknown>)
+}
+
+function writeJsonl(path: string, rows: readonly Record<string, unknown>[]): void {
+  ensureDir(dirname(path))
+  writeFileSync(path, rows.map(row => JSON.stringify(row)).join('\n') + (rows.length > 0 ? '\n' : ''))
+}
+
+function appendJsonl(path: string, row: Record<string, unknown>): void {
+  ensureDir(dirname(path))
+  writeFileSync(path, `${JSON.stringify(row)}\n`, { flag: 'a' })
+}
+
+function checkpointDir(runDir: string): string {
+  return join(runDir, 'checkpoint')
+}
+
+function checkpointMemoryBaseDir(runDir: string): string {
+  return join(checkpointDir(runDir), 'memory-base')
+}
+
+function checkpointManifestPath(runDir: string): string {
+  return join(checkpointDir(runDir), 'manifest.json')
+}
+
+function checkpointResumeEventsPath(runDir: string): string {
+  return join(checkpointDir(runDir), 'resume_events.jsonl')
+}
+
+function windowsHash(windows: readonly WindowInput[]): string {
+  const payload = JSON.stringify(
+    windows.map(window => ({
+      window_id: window.window_id,
+      source_rows: window.source_rows,
+      model_visible_message_count: window.model_visible_message_count,
+      content: window.content,
+    })),
+  )
+  return createHash('sha256').update(payload).digest('hex')
+}
+
+function componentCheckpointManifest(params: {
+  options: CliOptions
+  windows: readonly WindowInput[]
+  metrics: readonly WindowMetric[]
+}): ComponentCheckpointManifest {
+  const completedWindows = params.metrics.length
+  return {
+    schema_version: CHECKPOINT_SCHEMA_VERSION,
+    provider: params.options.provider,
+    model: params.options.model,
+    messages_per_window: params.options.messagesPerWindow,
+    run_autodream: params.options.runAutoDream,
+    run_direct_dream: params.options.runDirectDream,
+    keep_going: params.options.keepGoing,
+    trace: params.options.trace,
+    windows_hash: windowsHash(params.windows),
+    completed_windows: completedWindows,
+    last_window_id: completedWindows === 0 ? '' : params.windows[completedWindows - 1]?.window_id ?? '',
+  }
+}
+
+function saveComponentCheckpoint(params: {
+  runDir: string
+  memoryBaseDir: string
+  options: CliOptions
+  windows: readonly WindowInput[]
+  metrics: readonly WindowMetric[]
+  directDreamMetrics: readonly DirectDreamMetric[]
+}): void {
+  const directory = checkpointDir(params.runDir)
+  ensureDir(directory)
+  copyDirIfExists(params.memoryBaseDir, checkpointMemoryBaseDir(params.runDir))
+  writeJsonl(join(directory, 'windows.jsonl'), params.metrics as unknown as Record<string, unknown>[])
+  writeJsonl(join(directory, 'direct_dream_windows.jsonl'), params.directDreamMetrics as unknown as Record<string, unknown>[])
+  writeFileSync(
+    checkpointManifestPath(params.runDir),
+    JSON.stringify(
+      componentCheckpointManifest({
+        options: params.options,
+        windows: params.windows,
+        metrics: params.metrics,
+      }),
+      null,
+      2,
+    ) + '\n',
+  )
+}
+
+function loadComponentCheckpoint(params: {
+  runDir: string
+  options: CliOptions
+  windows: readonly WindowInput[]
+}): ComponentCheckpoint {
+  const manifestPath = checkpointManifestPath(params.runDir)
+  if (!existsSync(manifestPath)) {
+    throw new Error(`--resume requires an existing checkpoint: ${manifestPath}`)
+  }
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as ComponentCheckpointManifest
+  const expected = componentCheckpointManifest({
+    options: params.options,
+    windows: params.windows,
+    metrics: [],
+  })
+  const keys: (keyof ComponentCheckpointManifest)[] = [
+    'schema_version',
+    'provider',
+    'model',
+    'messages_per_window',
+    'run_autodream',
+    'run_direct_dream',
+    'keep_going',
+    'trace',
+    'windows_hash',
+  ]
+  const mismatches = keys.filter(key => manifest[key] !== expected[key])
+  if (mismatches.length > 0) {
+    throw new Error(`Checkpoint does not match current arguments: ${mismatches.join(', ')}`)
+  }
+  if (manifest.completed_windows < 0 || manifest.completed_windows > params.windows.length) {
+    throw new Error('Checkpoint completed_windows is out of range')
+  }
+  const metrics = readJsonl(join(checkpointDir(params.runDir), 'windows.jsonl')) as unknown as WindowMetric[]
+  const directDreamMetrics = readJsonl(join(checkpointDir(params.runDir), 'direct_dream_windows.jsonl')) as unknown as DirectDreamMetric[]
+  if (metrics.length !== manifest.completed_windows) {
+    throw new Error('Checkpoint windows.jsonl does not match completed_windows')
+  }
+  if (params.options.runDirectDream === 'each-window' && directDreamMetrics.length > manifest.completed_windows) {
+    throw new Error('Checkpoint direct_dream_windows.jsonl has more rows than completed windows')
+  }
+  return { manifest, metrics, directDreamMetrics }
 }
 
 function listFiles(dir: string): string[] {
@@ -1199,7 +1369,13 @@ async function main(): Promise<void> {
   const debugPath = join(nativeDir, 'debug.log')
   const projectDir = join(TMP_PROJECT_ROOT, basename(runDir), 'project')
 
-  safeRemove(runDir)
+  if (options.resume) {
+    if (!existsSync(runDir)) {
+      throw new Error(`--resume output dir does not exist: ${runDir}`)
+    }
+  } else {
+    safeRemove(runDir)
+  }
   ensureDir(inputDir)
   ensureDir(nativeDir)
   ensureDir(metricsDir)
@@ -1230,13 +1406,31 @@ async function main(): Promise<void> {
   writeInputs(inputDir, selectedRows, windows)
   writeRunMetadata({ runDir, projectDir, memoryBaseDir, configDir, options, windows })
 
+  const checkpoint = options.resume
+    ? loadComponentCheckpoint({ runDir, options, windows })
+    : undefined
+  if (checkpoint) {
+    appendJsonl(checkpointResumeEventsPath(runDir), {
+      event: 'resume',
+      resumed_at: new Date().toISOString(),
+      completed_windows: checkpoint.manifest.completed_windows,
+      last_window_id: checkpoint.manifest.last_window_id,
+    })
+    safeRemove(memoryBaseDir)
+    copyDirIfExists(checkpointMemoryBaseDir(runDir), memoryBaseDir)
+  }
+
   const runtime = await loadNativeRuntime(options)
   const transcriptMessages: unknown[] = []
-  const metrics: WindowMetric[] = []
-  const directDreamMetrics: DirectDreamMetric[] = []
+  const metrics: WindowMetric[] = checkpoint ? [...checkpoint.metrics] : []
+  const directDreamMetrics: DirectDreamMetric[] = checkpoint ? [...checkpoint.directDreamMetrics] : []
   const runId = basename(runDir)
+  const completedWindows = checkpoint?.manifest.completed_windows ?? 0
+  for (const window of windows.slice(0, completedWindows)) {
+    transcriptMessages.push(runtime.createUserMessage({ content: window.content }))
+  }
 
-  for (const window of windows) {
+  for (const window of windows.slice(completedWindows)) {
     const start = Date.now()
     const debugStart = existsSync(debugPath) ? readFileSync(debugPath, 'utf8').length : 0
     const appendMessages: unknown[] = []
@@ -1312,6 +1506,14 @@ async function main(): Promise<void> {
       extractor_cache_creation_input_tokens: extractorFinish.cacheCreationInputTokens,
       extractor_invalid_reason: extractorInvalidReason,
       error,
+    })
+    saveComponentCheckpoint({
+      runDir,
+      memoryBaseDir,
+      options,
+      windows,
+      metrics,
+      directDreamMetrics,
     })
     if (status === 'error' && !options.keepGoing) break
   }

@@ -11,7 +11,7 @@ import {
   summarizeQuestionMetrics,
   tokenF1,
 } from './metrics.ts'
-import { inspectSelectorArtifacts, inspectSelectorOutput } from './retrievalAnomalies.ts'
+import { firstModelText, inspectSelectorArtifacts, inspectSelectorOutput, selectorSystemText } from './retrievalAnomalies.ts'
 import { parseSelectedMemoryFilenames } from '../../src/memdir/findRelevantMemories.ts'
 
 type MetricParityCase = {
@@ -130,6 +130,30 @@ assertEqual(arraySelector.selectedFromTrace, 'file.md', 'array selector selected
 const lenientArraySelector = inspectSelectorOutput('["file.md"]', 'lenient')
 assertEqual(lenientArraySelector.reason, '', 'lenient array selector has no anomaly')
 assertEqual(lenientArraySelector.selectedFromTrace, 'file.md', 'lenient array selector selected file')
+
+assert(
+  selectorSystemText({ system: 'You are selecting memories that will be useful to Claude Code.' }).includes('selecting memories'),
+  'anthropic selector system text',
+)
+assert(
+  selectorSystemText({
+    messages: [
+      { role: 'system', content: 'You are selecting memories that will be useful to Claude Code.' },
+      { role: 'user', content: 'Query: adoption' },
+    ],
+  }).includes('selecting memories'),
+  'openai-compatible selector system text',
+)
+assertEqual(
+  firstModelText({ content: [{ type: 'text', text: '["file.md"]' }] }),
+  '["file.md"]',
+  'anthropic selector text block',
+)
+assertEqual(
+  firstModelText({ choices: [{ message: { content: '["file.md"]' } }] }),
+  '["file.md"]',
+  'openai-compatible selector choice text',
+)
 
 const validSelector = inspectSelectorOutput('{"selected_memories":["file.md"]}')
 assertEqual(validSelector.reason, '', 'valid selector object has no anomaly')

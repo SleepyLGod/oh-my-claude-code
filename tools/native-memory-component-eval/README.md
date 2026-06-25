@@ -39,6 +39,11 @@ The runner enables the required GrowthBook gates in the current process with
 does not modify the native memory implementation, prompts, scheduler, or global
 Claude Code config.
 
+If a long run stops because of a network or provider failure, rerun the same
+command with `--resume` and the same `--output-dir`. Resume starts after the
+last fully completed window; it does not resume a half-finished forked agent
+call.
+
 ## Run
 
 ```bash

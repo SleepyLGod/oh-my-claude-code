@@ -4,7 +4,8 @@
 Claude Code memory 和 `agent-memory` 在同一份 benchmark 输入、同一套 evaluator、同一套
 核心 metrics 下比较，同时不修改 native memory 产品逻辑。
 
-本文是 implementation decision record，不是 benchmark 结果报告。
+本文是 implementation decision record，不是 benchmark 结果报告。实际运行命令和结果解读入口见
+`tools/native-memory-benchmark/README.md`。
 
 ## 1. Goal and Non-Goals
 

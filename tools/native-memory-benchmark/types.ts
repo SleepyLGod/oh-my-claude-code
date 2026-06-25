@@ -41,6 +41,9 @@ export type BenchmarkRunConfig = {
   provider: string
   model: string
   answer_model: string
+  answer_max_tokens: number
+  trace_enabled: boolean
+  keep_going: boolean
 }
 
 export type RetrievalResultRow = {

@@ -11,7 +11,7 @@ import { createHash } from 'crypto'
 import { basename, dirname, join, relative, resolve } from 'path'
 import { eligibleQuestions, eventCsvRows, eventsJsonl, goldAnswerCsvValue, loadLocomoSample, questionCsvRows, questionsJsonl, selectEvents } from './locomo.ts'
 import { questionMetricRow, summarizeQuestionMetrics } from './metrics.ts'
-import { inspectSelectorArtifacts } from './retrievalAnomalies.ts'
+import { firstModelText, inspectSelectorArtifacts, selectorSystemText } from './retrievalAnomalies.ts'
 import type { BenchmarkEvent, BenchmarkQuestion, BenchmarkRunConfig, RetrievalResultRow } from './types.ts'
 
 type MaintenanceMode = 'extract-only' | 'natural-autodream' | 'seeded-autodream' | 'direct-dream-each-window'
@@ -36,6 +36,7 @@ type CliOptions = {
   selectorParseMode: SelectorParseMode
   trace: boolean
   keepGoing: boolean
+  resume: boolean
 }
 
 type ComponentSummary = Record<string, string>
@@ -45,6 +46,21 @@ type SelectorTraceObservation = {
   selectedFromTrace: string
   rawText: string
   traceId: string
+}
+
+type BenchmarkCheckpointManifest = {
+  schema_version: number
+  config_hash: string
+  question_ids: string[]
+  completed_questions: number
+  last_question_id: string
+  maintenance_complete: boolean
+  final_memory_path: string
+}
+
+type BenchmarkCheckpoint = {
+  manifest: BenchmarkCheckpointManifest
+  results: RetrievalResultRow[]
 }
 
 const DEFAULT_SAMPLE_INDEX = 0
@@ -58,6 +74,7 @@ const DEFAULT_MODEL = 'deepseek-v4-flash[1m]'
 const DEFAULT_ANSWER_MAX_TOKENS = 256
 const SELECTOR_MAX_TOKENS = 8192
 const DEFAULT_SELECTOR_PARSE_MODE: SelectorParseMode = 'strict'
+const CHECKPOINT_SCHEMA_VERSION = 1
 const ANSWER_SYSTEM_PROMPT = "Answer the benchmark question using only the retrieved memory context. If the context is insufficient, answer 'I don't know'."
 const ANSWER_USER_PROMPT_TEMPLATE = 'Question:\n{question}\n\nRetrieved memory context:\n{retrieved_text}\n\nAnswer with a short factual phrase or sentence.'
 
@@ -86,6 +103,7 @@ function usage(): string {
     `  --selector-parse-mode <mode> strict|lenient. Default: ${DEFAULT_SELECTOR_PARSE_MODE}`,
     '  --trace                      Enable native trace in component eval and retrieval.',
     '  --keep-going                 Continue component maintenance after failed windows.',
+    '  --resume                     Resume from <output-dir>/checkpoint. Requires --output-dir.',
     '  --help                       Show this help.',
     '',
     'Notes:',
@@ -109,6 +127,7 @@ function parseArgs(argv: string[]): CliOptions {
     selectorParseMode: DEFAULT_SELECTOR_PARSE_MODE,
     trace: false,
     keepGoing: false,
+    resume: false,
   }
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]
@@ -127,6 +146,10 @@ function parseArgs(argv: string[]): CliOptions {
     }
     if (arg === '--keep-going') {
       options.keepGoing = true
+      continue
+    }
+    if (arg === '--resume') {
+      options.resume = true
       continue
     }
     if (!next || next.startsWith('--')) throw new Error(`Missing value for ${arg}`)
@@ -204,6 +227,7 @@ function parseArgs(argv: string[]): CliOptions {
     throw new Error(`Unknown option: ${arg}`)
   }
   if (!options.locomoPath) throw new Error('--locomo-path is required')
+  if (options.resume && !options.outputDir) throw new Error('--resume requires --output-dir')
   validateProviderEnvironment(options.provider)
   return options
 }
@@ -321,6 +345,120 @@ function writeBenchmarkInputs(params: {
   writeFileSync(join(inputDir, 'run_config.json'), `${JSON.stringify(config, null, 2)}\n`)
 }
 
+function checkpointDir(runDir: string): string {
+  return join(runDir, 'checkpoint')
+}
+
+function checkpointManifestPath(runDir: string): string {
+  return join(checkpointDir(runDir), 'manifest.json')
+}
+
+function checkpointResultsPath(runDir: string): string {
+  return join(checkpointDir(runDir), 'retrieval_results.jsonl')
+}
+
+function checkpointResumeEventsPath(runDir: string): string {
+  return join(checkpointDir(runDir), 'resume_events.jsonl')
+}
+
+function configHash(config: BenchmarkRunConfig): string {
+  return createHash('sha256').update(JSON.stringify(config)).digest('hex')
+}
+
+function readJsonl(path: string): Record<string, unknown>[] {
+  if (!existsSync(path)) return []
+  return readFileSync(path, 'utf8')
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map(line => JSON.parse(line) as Record<string, unknown>)
+}
+
+function writeJsonl(path: string, rows: readonly Record<string, unknown>[]): void {
+  ensureDir(dirname(path))
+  writeFileSync(path, rows.map(row => JSON.stringify(row)).join('\n') + (rows.length > 0 ? '\n' : ''))
+}
+
+function appendJsonl(path: string, row: Record<string, unknown>): void {
+  ensureDir(dirname(path))
+  writeFileSync(path, `${JSON.stringify(row)}\n`, { flag: 'a' })
+}
+
+function benchmarkCheckpointManifest(params: {
+  config: BenchmarkRunConfig
+  questions: readonly BenchmarkQuestion[]
+  results: readonly RetrievalResultRow[]
+  maintenanceComplete: boolean
+  finalMemoryPath: string
+}): BenchmarkCheckpointManifest {
+  const completedQuestions = params.results.length
+  return {
+    schema_version: CHECKPOINT_SCHEMA_VERSION,
+    config_hash: configHash(params.config),
+    question_ids: params.questions.map(question => question.question_id),
+    completed_questions: completedQuestions,
+    last_question_id: completedQuestions === 0 ? '' : params.results[completedQuestions - 1]?.question_id ?? '',
+    maintenance_complete: params.maintenanceComplete,
+    final_memory_path: params.finalMemoryPath,
+  }
+}
+
+function saveBenchmarkCheckpoint(params: {
+  runDir: string
+  config: BenchmarkRunConfig
+  questions: readonly BenchmarkQuestion[]
+  results: readonly RetrievalResultRow[]
+  maintenanceComplete: boolean
+  finalMemoryPath: string
+}): void {
+  ensureDir(checkpointDir(params.runDir))
+  writeJsonl(checkpointResultsPath(params.runDir), params.results as unknown as Record<string, unknown>[])
+  writeFileSync(
+    checkpointManifestPath(params.runDir),
+    JSON.stringify(
+      benchmarkCheckpointManifest({
+        config: params.config,
+        questions: params.questions,
+        results: params.results,
+        maintenanceComplete: params.maintenanceComplete,
+        finalMemoryPath: params.finalMemoryPath,
+      }),
+      null,
+      2,
+    ) + '\n',
+  )
+}
+
+function loadBenchmarkCheckpoint(params: {
+  runDir: string
+  config: BenchmarkRunConfig
+  questions: readonly BenchmarkQuestion[]
+}): BenchmarkCheckpoint | undefined {
+  const manifestPath = checkpointManifestPath(params.runDir)
+  if (!existsSync(manifestPath)) return undefined
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as BenchmarkCheckpointManifest
+  const expectedConfigHash = configHash(params.config)
+  const expectedQuestionIds = params.questions.map(question => question.question_id)
+  const mismatches: string[] = []
+  if (manifest.schema_version !== CHECKPOINT_SCHEMA_VERSION) mismatches.push('schema_version')
+  if (manifest.config_hash !== expectedConfigHash) mismatches.push('config_hash')
+  if (JSON.stringify(manifest.question_ids) !== JSON.stringify(expectedQuestionIds)) mismatches.push('question_ids')
+  if (manifest.completed_questions < 0 || manifest.completed_questions > expectedQuestionIds.length) mismatches.push('completed_questions')
+  if (mismatches.length > 0) {
+    throw new Error(`Checkpoint does not match current arguments: ${mismatches.join(', ')}`)
+  }
+  const results = readJsonl(checkpointResultsPath(params.runDir)) as unknown as RetrievalResultRow[]
+  if (results.length !== manifest.completed_questions) {
+    throw new Error('Checkpoint retrieval_results.jsonl does not match completed_questions')
+  }
+  for (let index = 0; index < results.length; index += 1) {
+    if (results[index]?.question_id !== expectedQuestionIds[index]) {
+      throw new Error(`Checkpoint result row ${index + 1} has unexpected question_id`)
+    }
+  }
+  return { manifest, results }
+}
+
 function componentArgs(params: { options: CliOptions; eventsPath: string; componentDir: string }): string[] {
   const { options, eventsPath, componentDir } = params
   const args = [
@@ -342,6 +480,7 @@ function componentArgs(params: { options: CliOptions; eventsPath: string; compon
   if (options.memoryMode === 'direct-dream-each-window') args.push('--run-direct-dream', 'each-window')
   if (options.trace) args.push('--trace')
   if (options.keepGoing) args.push('--keep-going')
+  if (options.resume) args.push('--resume')
   return args
 }
 
@@ -430,18 +569,20 @@ async function runRetrieval(params: {
   runDir: string
   memoryDir: string
   questions: BenchmarkQuestion[]
+  initialRows: RetrievalResultRow[]
   answer: boolean
   answerModel: string
   answerMaxTokens: number
   selectorParseMode: SelectorParseMode
+  checkpoint: (rows: readonly RetrievalResultRow[]) => void
 }): Promise<RetrievalResultRow[]> {
   ensureDir(params.memoryDir)
   const [{ findRelevantMemories }, { readMemoriesForSurfacing }] = await Promise.all([
     import('../../src/memdir/findRelevantMemories.ts'),
     import('../../src/utils/attachments.ts'),
   ])
-  const rows: RetrievalResultRow[] = []
-  for (const question of params.questions) {
+  const rows: RetrievalResultRow[] = [...params.initialRows]
+  for (const question of params.questions.slice(rows.length)) {
     const controller = new AbortController()
     const start = performance.now()
     const traceBefore = listLlmRequestArtifacts(params.runDir)
@@ -491,6 +632,7 @@ async function runRetrieval(params: {
       retrieval_latency_sec: round4(retrievalLatency),
       ...(params.answer ? { answer_latency_sec: round4(answerLatency) } : {}),
     })
+    params.checkpoint(rows)
   }
   return rows
 }
@@ -536,13 +678,13 @@ function inspectSelectorTrace(params: {
 function selectorRequestTrace(runDir: string, requestPath: string, selectorParseMode: SelectorParseMode): SelectorTraceObservation | undefined {
   const request = readJson(requestPath)
   const payload = requestPayload(request)
-  const system = typeof payload?.system === 'string' ? payload.system : ''
+  const system = selectorSystemText(payload)
   if (!system.includes('You are selecting memories that will be useful to Claude Code')) return undefined
 
   const traceId = basename(requestPath).replace(/-request\.json$/, '')
   const response = readJson(join(runDir, 'trace', 'artifacts', 'llm-call', `${traceId}-response.json`))
   const error = readJson(join(runDir, 'trace', 'artifacts', 'llm-call', `${traceId}-error.json`))
-  const rawText = firstTextBlock(response)
+  const rawText = firstModelText(response)
   const selected = inspectSelectorArtifacts({ rawText, response, error, selectorParseMode })
   return {
     reason: selected.reason,
@@ -561,21 +703,6 @@ function requestPayload(value: unknown): Record<string, unknown> | undefined {
 function readJson(path: string): unknown {
   if (!existsSync(path)) return undefined
   return JSON.parse(readFileSync(path, 'utf8'))
-}
-
-function firstTextBlock(value: unknown): string {
-  const stack: unknown[] = [value]
-  while (stack.length > 0) {
-    const current = stack.shift()
-    if (Array.isArray(current)) {
-      stack.push(...current)
-      continue
-    }
-    if (!isRecord(current)) continue
-    if (current.type === 'text' && typeof current.text === 'string') return current.text
-    stack.push(...Object.values(current))
-  }
-  return ''
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -668,8 +795,10 @@ function summaryRow(params: {
     existing_memory_dir: params.options.existingMemoryDir ? resolve(params.options.existingMemoryDir) : '',
     retrieval_mode: 'component_retrieval',
     answer_mode: params.options.answer ? 'shared_answerer' : 'none',
+    answer_max_tokens: params.options.answer ? params.options.answerMaxTokens : '',
     selector_max_tokens: SELECTOR_MAX_TOKENS,
     selector_parse_mode: params.options.selectorParseMode,
+    trace_enabled: params.options.trace,
     provider: params.options.provider,
     model: params.options.model,
     answer_model: params.options.answer ? params.options.answerModel ?? params.options.model : '',
@@ -796,10 +925,15 @@ async function main(): Promise<void> {
   const defaultRunRoot = join(repoRoot, '.memory-test', 'native-locomo-benchmark')
   const runDir = resolve(options.outputDir ?? join(defaultRunRoot, timestampForPath()))
   if (existsSync(runDir)) {
-    if (options.outputDir) {
+    if (options.resume) {
+      // Keep the existing run directory intact; checkpoint validation happens after inputs are selected.
+    } else if (options.outputDir) {
       throw new Error(`--output-dir already exists; refusing to delete user-provided path: ${runDir}`)
+    } else {
+      safeRemove(runDir)
     }
-    safeRemove(runDir)
+  } else if (options.resume) {
+    throw new Error(`--resume output dir does not exist: ${runDir}`)
   }
   ensureDir(runDir)
 
@@ -833,6 +967,21 @@ async function main(): Promise<void> {
     provider: options.provider,
     model: options.model,
     answer_model: options.answerModel ?? options.model,
+    answer_max_tokens: options.answerMaxTokens,
+    trace_enabled: options.trace,
+    keep_going: options.keepGoing,
+  }
+  const checkpoint = options.resume
+    ? loadBenchmarkCheckpoint({ runDir, config, questions })
+    : undefined
+  if (checkpoint) {
+    appendJsonl(checkpointResumeEventsPath(runDir), {
+      event: 'resume',
+      resumed_at: new Date().toISOString(),
+      completed_questions: checkpoint.manifest.completed_questions,
+      last_question_id: checkpoint.manifest.last_question_id,
+      maintenance_complete: checkpoint.manifest.maintenance_complete,
+    })
   }
 
   const inputDir = join(runDir, 'input')
@@ -851,6 +1000,9 @@ async function main(): Promise<void> {
   if (existingMemoryDir) {
     componentSummary = externalMemorySummary(existingMemoryDir)
     finalMemoryPath = existingMemoryDir
+  } else if (checkpoint?.manifest.maintenance_complete && existsSync(checkpoint.manifest.final_memory_path)) {
+    componentSummary = readComponentSummary(componentDir)
+    finalMemoryPath = checkpoint.manifest.final_memory_path
   } else {
     runMaintenance({ repoRoot, options, eventsPath: join(inputDir, 'events.jsonl'), componentDir })
     componentSummary = readComponentSummary(componentDir)
@@ -864,16 +1016,34 @@ async function main(): Promise<void> {
       throw new Error(`Copied final memory is missing expected memory directory: ${finalMemoryPath}`)
     }
   }
+  saveBenchmarkCheckpoint({
+    runDir,
+    config,
+    questions,
+    results: checkpoint?.results ?? [],
+    maintenanceComplete: true,
+    finalMemoryPath,
+  })
 
   await setupNativeRetrieval({ runDir, provider: options.provider, trace: options.trace })
   const results = await runRetrieval({
     runDir,
     memoryDir: finalMemoryPath,
     questions,
+    initialRows: checkpoint?.results ?? [],
     answer: options.answer,
     answerModel: options.answerModel ?? options.model,
     answerMaxTokens: options.answerMaxTokens,
     selectorParseMode: options.selectorParseMode,
+    checkpoint: rows =>
+      saveBenchmarkCheckpoint({
+        runDir,
+        config,
+        questions,
+        results: rows,
+        maintenanceComplete: true,
+        finalMemoryPath,
+      }),
   })
   const summary = summaryRow({ options, events, questions, results, componentSummary, finalMemoryPath })
   const anomalyRows = retrievalAnomalyRows(results)

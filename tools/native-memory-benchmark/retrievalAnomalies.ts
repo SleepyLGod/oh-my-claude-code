@@ -4,6 +4,29 @@ export type SelectorOutputInspection = {
   rawText: string
 }
 
+export function selectorSystemText(payload: unknown): string {
+  if (!isRecord(payload)) return ''
+  const parts: string[] = []
+  if (typeof payload.system === 'string') parts.push(payload.system)
+
+  const messages = payload.messages
+  if (Array.isArray(messages)) {
+    for (const message of messages) {
+      if (!isRecord(message) || message.role !== 'system') continue
+      const text = messageContentText(message.content)
+      if (text) parts.push(text)
+    }
+  }
+
+  return parts.join('\n')
+}
+
+export function firstModelText(value: unknown): string {
+  const openAiText = firstOpenAiChoiceText(value)
+  if (openAiText) return openAiText
+  return firstAnthropicTextBlock(value)
+}
+
 export function inspectSelectorArtifacts(params: {
   rawText: string
   response?: unknown
@@ -113,6 +136,45 @@ function extractFilenameHints(rawText: string): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function firstOpenAiChoiceText(value: unknown): string {
+  if (!isRecord(value) || !Array.isArray(value.choices)) return ''
+  for (const choice of value.choices) {
+    if (!isRecord(choice) || !isRecord(choice.message)) continue
+    const text = messageContentText(choice.message.content)
+    if (text) return text
+  }
+  return ''
+}
+
+function firstAnthropicTextBlock(value: unknown): string {
+  const stack: unknown[] = [value]
+  while (stack.length > 0) {
+    const current = stack.shift()
+    if (Array.isArray(current)) {
+      stack.push(...current)
+      continue
+    }
+    if (!isRecord(current)) continue
+    if (current.type === 'text' && typeof current.text === 'string') return current.text
+    stack.push(...Object.values(current))
+  }
+  return ''
+}
+
+function messageContentText(content: unknown): string {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content
+    .map(part => {
+      if (!isRecord(part)) return ''
+      if (typeof part.text === 'string') return part.text
+      if (typeof part.content === 'string') return part.content
+      return ''
+    })
+    .filter(Boolean)
+    .join('\n')
 }
 
 function stopReason(value: unknown): string {
