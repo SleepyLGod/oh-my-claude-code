@@ -15,6 +15,12 @@ export type RelevantMemory = {
   mtimeMs: number
 }
 
+export type MemorySelectorParseMode = 'strict' | 'lenient'
+
+type FindRelevantMemoriesOptions = {
+  selectorParseMode?: MemorySelectorParseMode
+}
+
 const SELECT_MEMORIES_SYSTEM_PROMPT = `You are selecting memories that will be useful to Claude Code as it processes a user's query. You will be given the user's query and a list of available memory files with their filenames and descriptions.
 
 Return a list of filenames for the memories that will clearly be useful to Claude Code as it processes the user's query (up to 5). Only include memories that you are certain will be helpful based on their name and description.
@@ -22,6 +28,8 @@ Return a list of filenames for the memories that will clearly be useful to Claud
 - If there are no memories in the list that would clearly be useful, feel free to return an empty list.
 - If a list of recently-used tools is provided, do not select memories that are usage reference or API documentation for those tools (Claude Code is already exercising them). DO still select memories containing warnings, gotchas, or known issues about those tools — active use is exactly when those matter.
 `
+const SELECT_MEMORIES_MAX_TOKENS = 8192
+const MAX_SELECTED_MEMORIES = 5
 
 /**
  * Find memory files relevant to a query by scanning memory file headers
@@ -42,6 +50,7 @@ export async function findRelevantMemories(
   signal: AbortSignal,
   recentTools: readonly string[] = [],
   alreadySurfaced: ReadonlySet<string> = new Set(),
+  options: FindRelevantMemoriesOptions = {},
 ): Promise<RelevantMemory[]> {
   const memories = (await scanMemoryFiles(memoryDir, signal)).filter(
     m => !alreadySurfaced.has(m.filePath),
@@ -55,6 +64,7 @@ export async function findRelevantMemories(
     memories,
     signal,
     recentTools,
+    options.selectorParseMode ?? 'strict',
   )
   const byFilename = new Map(memories.map(m => [m.filename, m]))
   const selected = selectedFilenames
@@ -79,6 +89,7 @@ async function selectRelevantMemories(
   memories: MemoryHeader[],
   signal: AbortSignal,
   recentTools: readonly string[],
+  selectorParseMode: MemorySelectorParseMode,
 ): Promise<string[]> {
   const validFilenames = new Set(memories.map(m => m.filename))
 
@@ -105,7 +116,7 @@ async function selectRelevantMemories(
           content: `Query: ${query}\n\nAvailable memories:\n${manifest}${toolsSection}`,
         },
       ],
-      max_tokens: 256,
+      max_tokens: SELECT_MEMORIES_MAX_TOKENS,
       output_format: {
         type: 'json_schema',
         schema: {
@@ -126,8 +137,7 @@ async function selectRelevantMemories(
       return []
     }
 
-    const parsed: { selected_memories: string[] } = jsonParse(textBlock.text)
-    return parsed.selected_memories.filter(f => validFilenames.has(f))
+    return parseSelectedMemoryFilenames(textBlock.text, validFilenames, selectorParseMode)
   } catch (e) {
     if (signal.aborted) {
       return []
@@ -138,4 +148,82 @@ async function selectRelevantMemories(
     )
     return []
   }
+}
+
+export function parseSelectedMemoryFilenames(
+  rawText: string,
+  validFilenames: ReadonlySet<string>,
+  selectorParseMode: MemorySelectorParseMode,
+): string[] {
+  if (selectorParseMode === 'strict') {
+    const parsed: { selected_memories?: unknown } = jsonParse(rawText)
+    return Array.isArray(parsed.selected_memories)
+      ? validUniqueFilenames(parsed.selected_memories, validFilenames)
+      : []
+  }
+
+  const strictSelection = parseStrictSelection(rawText, validFilenames)
+  if (strictSelection.length > 0) return strictSelection
+
+  const parsed = parseJsonOrFencedJson(rawText)
+  if (Array.isArray(parsed)) {
+    return validUniqueFilenames(parsed, validFilenames)
+  }
+  if (parsed && typeof parsed === 'object') {
+    const selected = (parsed as { selected_memories?: unknown }).selected_memories
+    if (Array.isArray(selected)) return validUniqueFilenames(selected, validFilenames)
+  }
+
+  return validUniqueFilenames(extractFilenameHints(rawText), validFilenames)
+}
+
+function parseStrictSelection(
+  rawText: string,
+  validFilenames: ReadonlySet<string>,
+): string[] {
+  try {
+    const parsed: { selected_memories?: unknown } = jsonParse(rawText)
+    return Array.isArray(parsed.selected_memories)
+      ? validUniqueFilenames(parsed.selected_memories, validFilenames)
+      : []
+  } catch {
+    return []
+  }
+}
+
+function parseJsonOrFencedJson(rawText: string): unknown {
+  const candidates = [rawText, ...extractFencedJson(rawText)]
+  for (const candidate of candidates) {
+    try {
+      return jsonParse(candidate)
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return undefined
+}
+
+function extractFencedJson(rawText: string): string[] {
+  return [...rawText.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)].map(match => match[1] ?? '')
+}
+
+function extractFilenameHints(rawText: string): string[] {
+  return rawText.match(/[A-Za-z0-9][A-Za-z0-9._-]*\.md/g) ?? []
+}
+
+function validUniqueFilenames(
+  filenames: readonly unknown[],
+  validFilenames: ReadonlySet<string>,
+): string[] {
+  const selected: string[] = []
+  const seen = new Set<string>()
+  for (const filename of filenames) {
+    if (typeof filename !== 'string' || !validFilenames.has(filename) || seen.has(filename)) {
+      continue
+    }
+    selected.push(filename)
+    seen.add(filename)
+    if (selected.length >= MAX_SELECTED_MEMORIES) break
+  }
+  return selected
 }
