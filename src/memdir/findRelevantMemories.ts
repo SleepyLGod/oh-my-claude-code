@@ -3,16 +3,23 @@ import { logForDebugging } from '../utils/debug.js'
 import { errorMessage } from '../utils/errors.js'
 import { getDefaultSonnetModel } from '../utils/model/model.js'
 import { sideQuery } from '../utils/sideQuery.js'
-import { jsonParse } from '../utils/slowOperations.js'
 import {
   formatMemoryManifest,
   type MemoryHeader,
   scanMemoryFiles,
 } from './memoryScan.js'
+import {
+  parseSelectedMemoryFilenames,
+  type MemorySelectorParseMode,
+} from './memorySelectorParser.js'
 
 export type RelevantMemory = {
   path: string
   mtimeMs: number
+}
+
+type FindRelevantMemoriesOptions = {
+  selectorParseMode?: MemorySelectorParseMode
 }
 
 const SELECT_MEMORIES_SYSTEM_PROMPT = `You are selecting memories that will be useful to Claude Code as it processes a user's query. You will be given the user's query and a list of available memory files with their filenames and descriptions.
@@ -22,6 +29,7 @@ Return a list of filenames for the memories that will clearly be useful to Claud
 - If there are no memories in the list that would clearly be useful, feel free to return an empty list.
 - If a list of recently-used tools is provided, do not select memories that are usage reference or API documentation for those tools (Claude Code is already exercising them). DO still select memories containing warnings, gotchas, or known issues about those tools — active use is exactly when those matter.
 `
+const SELECT_MEMORIES_MAX_TOKENS = 8192
 
 /**
  * Find memory files relevant to a query by scanning memory file headers
@@ -42,6 +50,7 @@ export async function findRelevantMemories(
   signal: AbortSignal,
   recentTools: readonly string[] = [],
   alreadySurfaced: ReadonlySet<string> = new Set(),
+  options: FindRelevantMemoriesOptions = {},
 ): Promise<RelevantMemory[]> {
   const memories = (await scanMemoryFiles(memoryDir, signal)).filter(
     m => !alreadySurfaced.has(m.filePath),
@@ -55,6 +64,7 @@ export async function findRelevantMemories(
     memories,
     signal,
     recentTools,
+    options.selectorParseMode ?? 'strict',
   )
   const byFilename = new Map(memories.map(m => [m.filename, m]))
   const selected = selectedFilenames
@@ -79,6 +89,7 @@ async function selectRelevantMemories(
   memories: MemoryHeader[],
   signal: AbortSignal,
   recentTools: readonly string[],
+  selectorParseMode: MemorySelectorParseMode,
 ): Promise<string[]> {
   const validFilenames = new Set(memories.map(m => m.filename))
 
@@ -105,7 +116,7 @@ async function selectRelevantMemories(
           content: `Query: ${query}\n\nAvailable memories:\n${manifest}${toolsSection}`,
         },
       ],
-      max_tokens: 256,
+      max_tokens: SELECT_MEMORIES_MAX_TOKENS,
       output_format: {
         type: 'json_schema',
         schema: {
@@ -126,8 +137,7 @@ async function selectRelevantMemories(
       return []
     }
 
-    const parsed: { selected_memories: string[] } = jsonParse(textBlock.text)
-    return parsed.selected_memories.filter(f => validFilenames.has(f))
+    return parseSelectedMemoryFilenames(textBlock.text, validFilenames, selectorParseMode)
   } catch (e) {
     if (signal.aborted) {
       return []

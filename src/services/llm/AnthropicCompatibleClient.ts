@@ -14,6 +14,11 @@ import {
   hasNoThinkingModelTag,
   normalizeModelStringForAPI,
 } from 'src/utils/model/model.js'
+import {
+  errorExecutionTraceLlmCall,
+  finishExecutionTraceLlmCall,
+  startExecutionTraceLlmCall,
+} from 'src/utils/executionTrace.js'
 import { toolToAPISchema } from 'src/utils/api.js'
 import type { Tool } from 'src/Tool.js'
 import type { AssistantMessage, StreamEvent } from 'src/types/message.js'
@@ -258,19 +263,42 @@ export class AnthropicCompatibleClient implements LLMClient {
     payload: Record<string, unknown>,
     signal?: AbortSignal,
   ): Promise<AnthropicResponse> {
-    const response = await fetch(`${this.getBaseURL()}/v1/messages`, {
-      method: 'POST',
-      headers: this.buildHeaders(),
-      body: JSON.stringify(this.compactPayload(payload)),
-      signal,
+    const requestPayload = this.compactPayload(payload)
+    const trace = startExecutionTraceLlmCall({
+      provider: 'anthropic_compat',
+      profileName: this.profileName,
+      model: requestPayload.model,
+      endpoint: '/v1/messages',
+      streaming: false,
+      request: requestPayload,
     })
 
-    if (!response.ok) {
-      const text = await response.text()
-      throw new Error(this.formatHttpError(response.status, text))
-    }
+    try {
+      const response = await fetch(`${this.getBaseURL()}/v1/messages`, {
+        method: 'POST',
+        headers: this.buildHeaders(),
+        body: JSON.stringify(requestPayload),
+        signal,
+      })
 
-    return (await response.json()) as AnthropicResponse
+      if (!response.ok) {
+        const text = await response.text()
+        throw new Error(this.formatHttpError(response.status, text))
+      }
+
+      const json = (await response.json()) as AnthropicResponse
+      finishExecutionTraceLlmCall(trace, {
+        response: json,
+        requestId: json._request_id ?? json.id,
+        model: json.model,
+        usage: json.usage,
+        stopReason: json.stop_reason,
+      })
+      return json
+    } catch (error) {
+      errorExecutionTraceLlmCall(trace, error)
+      throw error
+    }
   }
 
   private async createMessageStream(
@@ -280,7 +308,7 @@ export class AnthropicCompatibleClient implements LLMClient {
     const response = await fetch(`${this.getBaseURL()}/v1/messages`, {
       method: 'POST',
       headers: this.buildHeaders(),
-      body: JSON.stringify(this.compactPayload({ ...payload, stream: true })),
+      body: JSON.stringify(this.buildStreamingPayload(payload)),
       signal,
     })
 
@@ -339,29 +367,65 @@ export class AnthropicCompatibleClient implements LLMClient {
     payload: Record<string, unknown>,
   ): AsyncGenerator<AssistantMessage | StreamEvent, void> {
     yield { type: 'stream_request_start' }
-    const stream = await this.createMessageStream(payload, request.signal)
+    const streamPayload = this.buildStreamingPayload(payload)
+    const trace = startExecutionTraceLlmCall({
+      provider: 'anthropic_compat',
+      profileName: this.profileName,
+      model: streamPayload.model,
+      endpoint: '/v1/messages',
+      streaming: true,
+      request: streamPayload,
+    })
+
+    let stream: ReadableStream<Uint8Array>
+    try {
+      stream = await this.createMessageStream(payload, request.signal)
+    } catch (error) {
+      errorExecutionTraceLlmCall(trace, error)
+      throw error
+    }
     const blocks = new Map<number, StreamingBlock>()
+    const rawEvents: AnthropicStreamEvent[] = []
     let model = String(payload.model || request.options.model)
     let usage: Usage | undefined
     let stopReason: string | null = null
 
-    for await (const event of this.iterSSEEvents(stream)) {
-      if (event.message?.model) model = event.message.model
-      usage = this.mergeUsage(usage, event.message?.usage)
-      usage = this.mergeUsage(usage, event.usage)
-      if (
-        event.type === 'message_delta' &&
-        typeof event.delta?.stop_reason === 'string'
-      ) {
-        stopReason = event.delta.stop_reason
+    try {
+      for await (const event of this.iterSSEEvents(stream)) {
+        rawEvents.push(event)
+        if (event.message?.model) model = event.message.model
+        usage = this.mergeUsage(usage, event.message?.usage)
+        usage = this.mergeUsage(usage, event.usage)
+        if (
+          event.type === 'message_delta' &&
+          typeof event.delta?.stop_reason === 'string'
+        ) {
+          stopReason = event.delta.stop_reason
+        }
+        this.updateStreamingBlocks(blocks, event)
+        yield { type: 'stream_event', event: event as unknown as Record<string, unknown> }
       }
-      this.updateStreamingBlocks(blocks, event)
-      yield { type: 'stream_event', event: event as unknown as Record<string, unknown> }
+    } catch (error) {
+      errorExecutionTraceLlmCall(trace, error)
+      throw error
     }
 
     this.trackUsage(model, usage)
+    const assistantContent = this.buildAssistantContentFromStreaming(blocks)
+    finishExecutionTraceLlmCall(trace, {
+      response: {
+        events: rawEvents,
+        content: assistantContent,
+        usage,
+        stop_reason: stopReason,
+      },
+      requestId: rawEvents.find(event => event.message?.id)?.message?.id,
+      model,
+      usage,
+      stopReason,
+    })
     yield createAssistantMessage({
-      content: this.buildAssistantContentFromStreaming(blocks) as never,
+      content: assistantContent as never,
       usage: usage as never,
     })
     const maxTokensMessage = this.createMaxTokensMessage(
@@ -411,6 +475,12 @@ export class AnthropicCompatibleClient implements LLMClient {
       block.inputJson =
         (block.inputJson ?? '') + String(event.delta.partial_json ?? '')
     }
+  }
+
+  private buildStreamingPayload(
+    payload: Record<string, unknown>,
+  ): Record<string, unknown> {
+    return this.compactPayload({ ...payload, stream: true })
   }
 
   private async *iterSSEEvents(

@@ -26,6 +26,12 @@ import type { AgentId } from '../types/ids.js'
 import type { Message } from '../types/message.js'
 import { createChildAbortController } from './abortController.js'
 import { logForDebugging } from './debug.js'
+import {
+  createExecutionTraceId,
+  writeExecutionTraceArtifact,
+  writeExecutionTraceEvent,
+  withExecutionTraceContext,
+} from './executionTrace.js'
 import { cloneFileStateCache } from './fileStateCache.js'
 import type { REPLHookContext } from './hooks/postSamplingHooks.js'
 import {
@@ -540,20 +546,46 @@ export async function runForkedAgent({
         : null
   }
 
-  // Run the query loop with isolated context (cache-safe params preserved)
-  try {
-    for await (const message of query({
-      messages: initialMessages,
+  const traceId = createExecutionTraceId('forked-agent')
+  const inputArtifact = writeExecutionTraceArtifact(
+    'forked-agent',
+    traceId,
+    'input',
+    {
+      forkLabel,
+      querySource,
+      promptMessages,
       systemPrompt,
       userContext,
       systemContext,
-      canUseTool,
-      toolUseContext: isolatedToolUseContext,
-      querySource,
-      maxOutputTokensOverride: maxOutputTokens,
-      maxTurns,
-      skipCacheWrite,
-    })) {
+      initialMessages,
+    },
+  )
+  writeExecutionTraceEvent('forked_agent_start', {
+    trace_id: traceId,
+    fork_label: forkLabel,
+    query_source: querySource,
+    prompt_message_count: promptMessages.length,
+    initial_message_count: initialMessages.length,
+    input_artifact_path: inputArtifact?.path,
+    trace_write_ms: inputArtifact?.traceWriteMs,
+  })
+
+  // Run the query loop with isolated context (cache-safe params preserved)
+  try {
+    await withExecutionTraceContext({ forkLabel, querySource }, async () => {
+      for await (const message of query({
+        messages: initialMessages,
+        systemPrompt,
+        userContext,
+        systemContext,
+        canUseTool,
+        toolUseContext: isolatedToolUseContext,
+        querySource,
+        maxOutputTokensOverride: maxOutputTokens,
+        maxTurns,
+        skipCacheWrite,
+      })) {
       // Extract real usage from message_delta stream events (final usage per API call)
       if (message.type === 'stream_event') {
         if (
@@ -596,6 +628,7 @@ export async function runForkedAgent({
         }
       }
     }
+    })
   } finally {
     // Release cloned file state cache memory (same pattern as runAgent.ts)
     isolatedToolUseContext.readFileState.clear()
@@ -608,6 +641,32 @@ export async function runForkedAgent({
   )
 
   const durationMs = Date.now() - startTime
+  const outputArtifact = writeExecutionTraceArtifact(
+    'forked-agent',
+    traceId,
+    'output',
+    {
+      forkLabel,
+      querySource,
+      messages: outputMessages,
+      totalUsage,
+      durationMs,
+    },
+  )
+  writeExecutionTraceEvent('forked_agent_finish', {
+    trace_id: traceId,
+    fork_label: forkLabel,
+    query_source: querySource,
+    message_count: outputMessages.length,
+    message_types: outputMessages.map(m => m.type).join('|'),
+    input_tokens: totalUsage.input_tokens,
+    output_tokens: totalUsage.output_tokens,
+    cache_read_input_tokens: totalUsage.cache_read_input_tokens,
+    cache_creation_input_tokens: totalUsage.cache_creation_input_tokens,
+    duration_ms: durationMs,
+    output_artifact_path: outputArtifact?.path,
+    trace_write_ms: outputArtifact?.traceWriteMs,
+  })
 
   // Log the fork query metrics with full NonNullableUsage
   logForkAgentQueryEvent({

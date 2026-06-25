@@ -1,0 +1,45 @@
+[
+  {
+    "sample_id": "conv-test",
+    "conversation": {
+      "session_1_date_time": "2026-01-01",
+      "session_1": [
+        {
+          "speaker": "Caroline",
+          "dia_id": "D1:1",
+          "text": "I started researching adoption agencies."
+        },
+        {
+          "speaker": "Melanie",
+          "dia_id": "D1:2",
+          "text": "That sounds like a big step."
+        },
+        {
+          "speaker": "Caroline",
+          "dia_id": "D1:3",
+          "text": ""
+        }
+      ]
+    },
+    "qa": [
+      {
+        "question": "What did Caroline research?",
+        "answer": "adoption agencies",
+        "evidence": ["D1:1"],
+        "category": 1
+      },
+      {
+        "question": "Who encouraged Caroline?",
+        "answer": "Melanie",
+        "evidence": ["D1:2"],
+        "category": 2
+      },
+      {
+        "question": "What happens in the future?",
+        "answer": "unknown",
+        "evidence": ["D9:1"],
+        "category": 3
+      }
+    ]
+  }
+]
