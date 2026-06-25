@@ -33,8 +33,6 @@ then runs strict and lenient retrieval against the same frozen memory directory.
 ### 1. Build frozen memory
 
 ```bash
-cd /Users/von/Projects/claude-code-replica
-
 RUN_ID=$(date +%Y%m%d-%H%M%S)
 BASE_DIR=".memory-test/native-locomo-benchmark-30-frozen-memory-$RUN_ID"
 

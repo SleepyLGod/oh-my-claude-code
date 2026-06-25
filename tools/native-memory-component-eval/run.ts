@@ -10,6 +10,7 @@ import {
   utimesSync,
   writeFileSync,
 } from 'fs'
+import { tmpdir } from 'os'
 import { basename, dirname, join, resolve } from 'path'
 import { withExecutionTraceContext } from '../../src/utils/executionTrace.ts'
 
@@ -165,7 +166,7 @@ const DEFAULT_DIRECT_DREAM_MODE = 'none'
 const SEEDED_AUTODREAM_SESSION_COUNT = 6
 const SEEDED_AUTODREAM_LOCK_AGE_HOURS = 48
 const CHECKPOINT_SCHEMA_VERSION = 1
-const TMP_PROJECT_ROOT = '/private/tmp/claude-code-native-memory-component-projects'
+const TMP_PROJECT_ROOT = join(tmpdir(), 'claude-code-native-memory-component-projects')
 const LOCOMO_URL =
   'https://raw.githubusercontent.com/snap-research/locomo/main/data/locomo10.json'
 const EXTRACT_FEATURE_OVERRIDES = {
@@ -713,8 +714,14 @@ function loadComponentCheckpoint(params: {
   if (metrics.length !== manifest.completed_windows) {
     throw new Error('Checkpoint windows.jsonl does not match completed_windows')
   }
+  if (metrics.some(metric => metric.status !== 'ok')) {
+    throw new Error('Checkpoint windows.jsonl contains non-successful windows')
+  }
   if (params.options.runDirectDream === 'each-window' && directDreamMetrics.length > manifest.completed_windows) {
     throw new Error('Checkpoint direct_dream_windows.jsonl has more rows than completed windows')
+  }
+  if (directDreamMetrics.some(metric => metric.status !== 'ok')) {
+    throw new Error('Checkpoint direct_dream_windows.jsonl contains non-successful runs')
   }
   return { manifest, metrics, directDreamMetrics }
 }
@@ -1376,6 +1383,22 @@ async function main(): Promise<void> {
   } else {
     safeRemove(runDir)
   }
+  let selectedRows: LocomoRow[]
+  let windows: WindowInput[]
+  if (options.eventsJsonl) {
+    selectedRows = loadRowsFromEventsJsonl(resolve(options.eventsJsonl))
+    windows = buildWindowsFromSelectedRows(selectedRows, options.messagesPerWindow)
+  } else {
+    const locomoPath = await ensureLocomoDataset(options, cacheDir)
+    const rows = loadLocomoRows(locomoPath)
+    const startIndex = options.startRow - 1
+    selectedRows = rows.slice(startIndex, startIndex + options.rowLimit)
+    windows = buildWindows(rows, options)
+  }
+  const checkpoint = options.resume
+    ? loadComponentCheckpoint({ runDir, options, windows })
+    : undefined
+
   ensureDir(inputDir)
   ensureDir(nativeDir)
   ensureDir(metricsDir)
@@ -1390,25 +1413,9 @@ async function main(): Promise<void> {
     trace: options.trace,
   })
   process.chdir(projectDir)
-
-  let selectedRows: LocomoRow[]
-  let windows: WindowInput[]
-  if (options.eventsJsonl) {
-    selectedRows = loadRowsFromEventsJsonl(resolve(options.eventsJsonl))
-    windows = buildWindowsFromSelectedRows(selectedRows, options.messagesPerWindow)
-  } else {
-    const locomoPath = await ensureLocomoDataset(options, cacheDir)
-    const rows = loadLocomoRows(locomoPath)
-    const startIndex = options.startRow - 1
-    selectedRows = rows.slice(startIndex, startIndex + options.rowLimit)
-    windows = buildWindows(rows, options)
-  }
   writeInputs(inputDir, selectedRows, windows)
   writeRunMetadata({ runDir, projectDir, memoryBaseDir, configDir, options, windows })
 
-  const checkpoint = options.resume
-    ? loadComponentCheckpoint({ runDir, options, windows })
-    : undefined
   if (checkpoint) {
     appendJsonl(checkpointResumeEventsPath(runDir), {
       event: 'resume',
@@ -1507,15 +1514,19 @@ async function main(): Promise<void> {
       extractor_invalid_reason: extractorInvalidReason,
       error,
     })
-    saveComponentCheckpoint({
-      runDir,
-      memoryBaseDir,
-      options,
-      windows,
-      metrics,
-      directDreamMetrics,
-    })
-    if (status === 'error' && !options.keepGoing) break
+    if (status === 'ok' && metrics.every(metric => metric.status === 'ok')) {
+      saveComponentCheckpoint({
+        runDir,
+        memoryBaseDir,
+        options,
+        windows,
+        metrics,
+        directDreamMetrics,
+      })
+    }
+    if (status !== 'ok' && !options.keepGoing) {
+      throw new Error(error || `${window.window_id} failed with status=${status}`)
+    }
   }
 
   let autoDreamMetric: AutoDreamMetric = {

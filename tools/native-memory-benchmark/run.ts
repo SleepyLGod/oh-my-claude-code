@@ -75,7 +75,7 @@ const DEFAULT_ANSWER_MAX_TOKENS = 256
 const SELECTOR_MAX_TOKENS = 8192
 const DEFAULT_SELECTOR_PARSE_MODE: SelectorParseMode = 'strict'
 const CHECKPOINT_SCHEMA_VERSION = 1
-const ANSWER_SYSTEM_PROMPT = "Answer the benchmark question using only the retrieved memory context. If the context is insufficient, answer 'I don't know'."
+const ANSWER_SYSTEM_PROMPT = "Answer the benchmark question using only the retrieved memory context. If the context is insufficient, answer 'No information available.'."
 const ANSWER_USER_PROMPT_TEMPLATE = 'Question:\n{question}\n\nRetrieved memory context:\n{retrieved_text}\n\nAnswer with a short factual phrase or sentence.'
 
 function usage(): string {
@@ -433,9 +433,11 @@ function loadBenchmarkCheckpoint(params: {
   runDir: string
   config: BenchmarkRunConfig
   questions: readonly BenchmarkQuestion[]
-}): BenchmarkCheckpoint | undefined {
+}): BenchmarkCheckpoint {
   const manifestPath = checkpointManifestPath(params.runDir)
-  if (!existsSync(manifestPath)) return undefined
+  if (!existsSync(manifestPath)) {
+    throw new Error(`--resume requires an existing checkpoint: ${manifestPath}`)
+  }
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as BenchmarkCheckpointManifest
   const expectedConfigHash = configHash(params.config)
   const expectedQuestionIds = params.questions.map(question => question.question_id)

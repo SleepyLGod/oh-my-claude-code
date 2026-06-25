@@ -86,6 +86,7 @@ assertEqual(locomoAnswerScore('running', 'runs', 2), 1.0, 'porter running/runs')
 assert(locomoAnswerScore('helped with childcare', 'help with child care', 4) > 0, 'category 4 stemmed f1')
 assertEqual(locomoAnswerScore('psychology', 'psychology; counseling certification', 3), 1.0, 'category 3 semicolon')
 assertEqual(locomoAnswerScore('No information available in the memory.', 'anything', 5), 1.0, 'category 5 no info')
+assertEqual(locomoAnswerScore("I don't know.", 'anything', 5), 0.0, "category 5 does not treat I don't know as official no-info")
 assertEqual(locomoAnswerScore('Caroline went yesterday.', 'anything', 5), 0.0, 'category 5 non no-info')
 assertEqual(locomoF1Score('8 May 2023.', '7 May 2023'), 2 / 3, 'date f1')
 
