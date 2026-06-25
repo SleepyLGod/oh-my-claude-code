@@ -12,7 +12,7 @@ import {
   tokenF1,
 } from './metrics.ts'
 import { firstModelText, inspectSelectorArtifacts, inspectSelectorOutput, selectorSystemText } from './retrievalAnomalies.ts'
-import { parseSelectedMemoryFilenames } from '../../src/memdir/findRelevantMemories.ts'
+import { parseSelectedMemoryFilenames } from '../../src/memdir/memorySelectorParser.ts'
 
 type MetricParityCase = {
   name: string
@@ -187,6 +187,16 @@ assertEqual(
   parseSelectedMemoryFilenames('["caroline_adoption_dream.md"]', validFilenames, 'strict').join(';'),
   '',
   'strict parser rejects array',
+)
+assertEqual(
+  parseSelectedMemoryFilenames('{bad json', validFilenames, 'strict').join(';'),
+  '',
+  'strict parser rejects malformed json without throwing',
+)
+assertEqual(
+  parseSelectedMemoryFilenames('null', validFilenames, 'strict').join(';'),
+  '',
+  'strict parser rejects null without throwing',
 )
 assertEqual(
   parseSelectedMemoryFilenames('["caroline_adoption_dream.md"]', validFilenames, 'lenient').join(';'),

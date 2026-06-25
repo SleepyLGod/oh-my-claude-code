@@ -784,8 +784,11 @@ function summaryRow(params: {
   const selectorInvalidJsonCount = params.results.filter(row => row.retrieval_anomaly_reason === 'selector_invalid_json').length
   const emptyRetrievalCount = params.results.filter(row => row.retrieved_row_count === 0).length
   const selectorSelectedButRejectedCount = params.results.filter(row => row.retrieval_anomaly_reason && row.selector_selected_from_trace).length
-  const cleanEmptyRetrievalCount = params.results.filter(row => row.retrieved_row_count === 0 && !row.retrieval_anomaly_reason).length
-  const retrievalAnomalyDetectionAvailable = params.options.trace
+  const selectorTraceObservedCount = params.results.filter(row => row.selector_trace_id).length
+  const selectorTraceMissingCount = params.results.length - selectorTraceObservedCount
+  const emptyRetrievalWithoutSelectorTraceCount = params.results.filter(row => row.retrieved_row_count === 0 && !row.selector_trace_id).length
+  const cleanEmptyRetrievalCount = params.results.filter(row => row.retrieved_row_count === 0 && !row.retrieval_anomaly_reason && row.selector_trace_id).length
+  const retrievalAnomalyDetectionAvailable = params.options.trace && selectorTraceMissingCount === 0
   return {
     run_mode: params.options.answer ? 'answer' : 'retrieval_only_diagnostic',
     input_rendering: 'message_with_event_context',
@@ -817,6 +820,9 @@ function summaryRow(params: {
     invalid_extractor_windows: params.componentSummary.invalidExtractorWindows ?? '0',
     invalid_direct_dream_runs: params.componentSummary.invalidDirectDreamRuns ?? '0',
     retrieval_anomaly_detection_available: retrievalAnomalyDetectionAvailable,
+    selector_trace_observed_count: selectorTraceObservedCount,
+    selector_trace_missing_count: selectorTraceMissingCount,
+    empty_retrieval_without_selector_trace_count: emptyRetrievalWithoutSelectorTraceCount,
     retrieval_anomaly_count: retrievalAnomalyCount,
     selector_schema_mismatch_count: selectorSchemaMismatchCount,
     selector_no_text_output_count: selectorNoTextOutputCount,
@@ -870,6 +876,9 @@ function writeReport(params: { runDir: string; summary: Record<string, unknown> 
     `- eligible_questions: ${params.summary.eligible_questions}`,
     `- invalid_llm_run_count: ${params.summary.invalid_llm_run_count}`,
     `- retrieval_anomaly_detection_available: ${params.summary.retrieval_anomaly_detection_available}`,
+    `- selector_trace_observed_count: ${params.summary.selector_trace_observed_count}`,
+    `- selector_trace_missing_count: ${params.summary.selector_trace_missing_count}`,
+    `- empty_retrieval_without_selector_trace_count: ${params.summary.empty_retrieval_without_selector_trace_count}`,
     `- retrieval_anomaly_count: ${params.summary.retrieval_anomaly_count}`,
     `- behavioral_evidence_valid: ${params.summary.behavioral_evidence_valid}`,
     '',

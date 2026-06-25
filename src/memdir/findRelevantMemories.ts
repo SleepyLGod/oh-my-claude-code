@@ -3,19 +3,20 @@ import { logForDebugging } from '../utils/debug.js'
 import { errorMessage } from '../utils/errors.js'
 import { getDefaultSonnetModel } from '../utils/model/model.js'
 import { sideQuery } from '../utils/sideQuery.js'
-import { jsonParse } from '../utils/slowOperations.js'
 import {
   formatMemoryManifest,
   type MemoryHeader,
   scanMemoryFiles,
 } from './memoryScan.js'
+import {
+  parseSelectedMemoryFilenames,
+  type MemorySelectorParseMode,
+} from './memorySelectorParser.js'
 
 export type RelevantMemory = {
   path: string
   mtimeMs: number
 }
-
-export type MemorySelectorParseMode = 'strict' | 'lenient'
 
 type FindRelevantMemoriesOptions = {
   selectorParseMode?: MemorySelectorParseMode
@@ -29,7 +30,6 @@ Return a list of filenames for the memories that will clearly be useful to Claud
 - If a list of recently-used tools is provided, do not select memories that are usage reference or API documentation for those tools (Claude Code is already exercising them). DO still select memories containing warnings, gotchas, or known issues about those tools — active use is exactly when those matter.
 `
 const SELECT_MEMORIES_MAX_TOKENS = 8192
-const MAX_SELECTED_MEMORIES = 5
 
 /**
  * Find memory files relevant to a query by scanning memory file headers
@@ -148,82 +148,4 @@ async function selectRelevantMemories(
     )
     return []
   }
-}
-
-export function parseSelectedMemoryFilenames(
-  rawText: string,
-  validFilenames: ReadonlySet<string>,
-  selectorParseMode: MemorySelectorParseMode,
-): string[] {
-  if (selectorParseMode === 'strict') {
-    const parsed: { selected_memories?: unknown } = jsonParse(rawText)
-    return Array.isArray(parsed.selected_memories)
-      ? validUniqueFilenames(parsed.selected_memories, validFilenames)
-      : []
-  }
-
-  const strictSelection = parseStrictSelection(rawText, validFilenames)
-  if (strictSelection.length > 0) return strictSelection
-
-  const parsed = parseJsonOrFencedJson(rawText)
-  if (Array.isArray(parsed)) {
-    return validUniqueFilenames(parsed, validFilenames)
-  }
-  if (parsed && typeof parsed === 'object') {
-    const selected = (parsed as { selected_memories?: unknown }).selected_memories
-    if (Array.isArray(selected)) return validUniqueFilenames(selected, validFilenames)
-  }
-
-  return validUniqueFilenames(extractFilenameHints(rawText), validFilenames)
-}
-
-function parseStrictSelection(
-  rawText: string,
-  validFilenames: ReadonlySet<string>,
-): string[] {
-  try {
-    const parsed: { selected_memories?: unknown } = jsonParse(rawText)
-    return Array.isArray(parsed.selected_memories)
-      ? validUniqueFilenames(parsed.selected_memories, validFilenames)
-      : []
-  } catch {
-    return []
-  }
-}
-
-function parseJsonOrFencedJson(rawText: string): unknown {
-  const candidates = [rawText, ...extractFencedJson(rawText)]
-  for (const candidate of candidates) {
-    try {
-      return jsonParse(candidate)
-    } catch {
-      // Try the next candidate.
-    }
-  }
-  return undefined
-}
-
-function extractFencedJson(rawText: string): string[] {
-  return [...rawText.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)].map(match => match[1] ?? '')
-}
-
-function extractFilenameHints(rawText: string): string[] {
-  return rawText.match(/[A-Za-z0-9][A-Za-z0-9._-]*\.md/g) ?? []
-}
-
-function validUniqueFilenames(
-  filenames: readonly unknown[],
-  validFilenames: ReadonlySet<string>,
-): string[] {
-  const selected: string[] = []
-  const seen = new Set<string>()
-  for (const filename of filenames) {
-    if (typeof filename !== 'string' || !validFilenames.has(filename) || seen.has(filename)) {
-      continue
-    }
-    selected.push(filename)
-    seen.add(filename)
-    if (selected.length >= MAX_SELECTED_MEMORIES) break
-  }
-  return selected
 }
