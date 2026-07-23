@@ -20,6 +20,7 @@ export type RelevantMemory = {
 
 type FindRelevantMemoriesOptions = {
   selectorParseMode?: MemorySelectorParseMode
+  thinking?: number | false
 }
 
 const SELECT_MEMORIES_SYSTEM_PROMPT = `You are selecting memories that will be useful to Claude Code as it processes a user's query. You will be given the user's query and a list of available memory files with their filenames and descriptions.
@@ -65,6 +66,7 @@ export async function findRelevantMemories(
     signal,
     recentTools,
     options.selectorParseMode ?? 'strict',
+    options.thinking,
   )
   const byFilename = new Map(memories.map(m => [m.filename, m]))
   const selected = selectedFilenames
@@ -90,6 +92,7 @@ async function selectRelevantMemories(
   signal: AbortSignal,
   recentTools: readonly string[],
   selectorParseMode: MemorySelectorParseMode,
+  thinking: number | false | undefined,
 ): Promise<string[]> {
   const validFilenames = new Set(memories.map(m => m.filename))
 
@@ -130,6 +133,7 @@ async function selectRelevantMemories(
       },
       signal,
       querySource: 'memdir_relevance',
+      thinking,
     })
 
     const textBlock = result.content.find(block => block.type === 'text')

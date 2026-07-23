@@ -5,7 +5,12 @@ import { join } from 'path'
 
 export type ExecutionTraceContext = {
   runId?: string
+  caseId?: string
   windowId?: string
+  eventId?: string
+  sessionId?: string
+  questionId?: string
+  attempt?: number
   phase?: string
   forkLabel?: string
   querySource?: string

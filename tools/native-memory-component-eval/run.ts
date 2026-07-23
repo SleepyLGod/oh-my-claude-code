@@ -14,8 +14,14 @@ import { tmpdir } from 'os'
 import { basename, dirname, join, resolve } from 'path'
 import { withExecutionTraceContext } from '../../src/utils/executionTrace.ts'
 
-type AutoDreamMode = 'none' | 'natural' | 'seeded'
-type DirectDreamMode = 'none' | 'each-window'
+export type AutoDreamMode = 'none' | 'natural' | 'seeded'
+export type DirectDreamMode = 'none' | 'each-window'
+
+export type NativeRuntimeOptions = {
+  model: string
+  runAutoDream: AutoDreamMode
+  runDirectDream: DirectDreamMode
+}
 
 type CliOptions = {
   rowLimit: number
@@ -872,7 +878,7 @@ function inspectMemorySnapshot(snapshotDir: string, memoryDirs: string[]): Memor
   }
 }
 
-function writeSettings(configDir: string, provider: string, runAutoDream: AutoDreamMode): void {
+export function writeSettings(configDir: string, provider: string, runAutoDream: AutoDreamMode): void {
   ensureDir(configDir)
   writeFileSync(
     join(configDir, 'settings.json'),
@@ -913,7 +919,7 @@ function mergeFeatureOverrides(overrides: Record<string, unknown>): string {
   }
 }
 
-function setupIsolatedEnvironment(params: {
+export function setupIsolatedEnvironment(params: {
   runDir: string
   configDir: string
   memoryBaseDir: string
@@ -958,7 +964,8 @@ function configureExtractFeatureGateEnvironment(growthbook: {
   }
 }
 
-type NativeRuntime = {
+export type NativeRuntime = {
+  memoryDir: string
   createUserMessage: (args: { content: string }) => unknown
   executeExtractMemories: (context: unknown, appendSystemMessage?: (message: unknown) => void) => Promise<void>
   drainPendingExtraction: (timeoutMs?: number) => Promise<void>
@@ -972,7 +979,7 @@ type NativeRuntime = {
   buildContext: (messages: unknown[]) => Promise<unknown>
 }
 
-async function loadNativeRuntime(options: CliOptions): Promise<NativeRuntime> {
+export async function loadNativeRuntime(options: NativeRuntimeOptions): Promise<NativeRuntime> {
   const { ensureBootstrapMacro } = await import('../../src/bootstrapMacro.ts')
   ensureBootstrapMacro()
 
@@ -992,8 +999,18 @@ async function loadNativeRuntime(options: CliOptions): Promise<NativeRuntime> {
       import('../../src/utils/messages.ts'),
       import('../../src/services/extractMemories/extractMemories.ts'),
       import('../../src/utils/config.ts'),
+      import('../../src/memdir/paths.ts'),
     ])
-  const [appStateModule, fileState, promptModule, systemPromptModule, messagesModule, extractModule, configModule] = imports
+  const [
+    appStateModule,
+    fileState,
+    promptModule,
+    systemPromptModule,
+    messagesModule,
+    extractModule,
+    configModule,
+    memoryPathsModule,
+  ] = imports
   const autoDreamModule =
     options.runAutoDream !== 'none'
       ? await import('../../src/services/autoDream/autoDream.ts')
@@ -1064,6 +1081,7 @@ async function loadNativeRuntime(options: CliOptions): Promise<NativeRuntime> {
   }
 
   return {
+    memoryDir: memoryPathsModule.getAutoMemPath(),
     createUserMessage: messagesModule.createUserMessage,
     executeExtractMemories: extractModule.executeExtractMemories,
     drainPendingExtraction: extractModule.drainPendingExtraction,
